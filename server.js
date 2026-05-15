@@ -10,6 +10,17 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
+// web-push (opcional — ativo somente se VAPID_PUBLIC_KEY estiver definido no .env)
+let webpush = null;
+if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+    webpush = require('web-push');
+    webpush.setVapidDetails(
+        `mailto:${process.env.VAPID_CONTACT_EMAIL || 'admin@bitpanel.local'}`,
+        process.env.VAPID_PUBLIC_KEY,
+        process.env.VAPID_PRIVATE_KEY
+    );
+}
+
 // Sentry (opcional — ativo somente se SENTRY_DSN estiver definido no .env)
 let Sentry = null;
 if (process.env.SENTRY_DSN) {
@@ -128,6 +139,31 @@ async function runMigrations(db) {
         await db.run('PRAGMA user_version = 2');
         console.log("Migration 2: Tabelas de rede e dominância criadas.");
     }
+
+    if (version < 3) {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT UNIQUE NOT NULL,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS price_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_id INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'BRL',
+                direction TEXT NOT NULL,
+                threshold REAL NOT NULL,
+                created_at INTEGER NOT NULL,
+                triggered_at INTEGER,
+                active INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (subscription_id) REFERENCES push_subscriptions(id) ON DELETE CASCADE
+            );
+        `);
+        await db.run('PRAGMA user_version = 3');
+        console.log("Migration 3: Tabelas de push notifications e alertas criadas.");
+    }
 }
 
 // --- FUNÇÕES PURAS DE CÁLCULO ---
@@ -194,6 +230,7 @@ async function updateHighFrequencyData() {
             [feesRes.data.fastestFee, feesRes.data.halfHourFee, feesRes.data.hourFee, blockHeight, mempoolRes.data.count, supply, now]
         );
         await db.run('INSERT INTO btc_global_metrics_history (timestamp, market_cap_usd) VALUES (?,?)', [now, marketCap]);
+        await checkAndSendAlerts({ btc_usd: btcUsd, btc_brl: btcBrl });
         console.log(`[${ts}] Worker: Dados de alta frequência salvos com sucesso.`);
     } catch (err) {
         console.error(`[${ts}] Worker: ERRO ao buscar dados de alta frequência:`, err.message);
@@ -332,6 +369,60 @@ async function updateLatestDailyData() {
     }
 }
 
+// --- ALERTAS DE PREÇO VIA PUSH ---
+
+async function checkAndSendAlerts(prices) {
+    if (!webpush) return;
+    try {
+        const alerts = await db.all(`
+            SELECT a.id, a.currency, a.direction, a.threshold, s.endpoint, s.p256dh, s.auth
+            FROM price_alerts a
+            JOIN push_subscriptions s ON a.subscription_id = s.id
+            WHERE a.active = 1
+        `);
+
+        for (const alert of alerts) {
+            const current = alert.currency === 'USD' ? prices.btc_usd : prices.btc_brl;
+            if (current == null) continue;
+
+            const triggered =
+                (alert.direction === 'above' && current >= alert.threshold) ||
+                (alert.direction === 'below' && current <= alert.threshold);
+
+            if (!triggered) continue;
+
+            const sym = alert.currency === 'USD' ? '$' : 'R$';
+            const dir = alert.direction === 'above' ? 'acima de' : 'abaixo de';
+            const payload = JSON.stringify({
+                title: '🚨 Alerta BitPanel',
+                body: `BTC/${alert.currency} ${dir} ${sym}${alert.threshold.toLocaleString('pt-BR')} · Atual: ${sym}${current.toLocaleString('pt-BR')}`,
+                icon: '/images/icon-192x192.png',
+                badge: '/images/icon-192x192.png',
+                url: '/',
+            });
+
+            try {
+                await webpush.sendNotification(
+                    { endpoint: alert.endpoint, keys: { p256dh: alert.p256dh, auth: alert.auth } },
+                    payload
+                );
+                await db.run('UPDATE price_alerts SET active = 0, triggered_at = ? WHERE id = ?', [Date.now(), alert.id]);
+                console.log(`Alerta ${alert.id} disparado (${alert.currency} ${alert.direction} ${alert.threshold}).`);
+            } catch (err) {
+                if (err.statusCode === 410) {
+                    await db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [alert.endpoint]);
+                    console.log(`Subscription expirada removida: ${alert.endpoint}`);
+                } else {
+                    console.error(`Erro ao enviar push alerta ${alert.id}:`, err.message);
+                }
+            }
+        }
+    } catch (err) {
+        console.error("Erro ao verificar alertas de preço:", err.message);
+        if (Sentry) Sentry.captureException(err);
+    }
+}
+
 // --- AGENDADORES ---
 
 function scheduleHighFrequencyWorker() {
@@ -396,6 +487,9 @@ const apiLimiter = rateLimit({
     message: { error: 'Muitas requisições. Tente novamente em breve.' },
 });
 app.use('/api/', apiLimiter);
+
+// Body parser para endpoints JSON
+app.use(express.json());
 
 // Arquivos estáticos e template engine
 app.use(express.static(path.join(__dirname, 'static')));
@@ -525,6 +619,92 @@ app.get('/api/fear-greed-history', async (req, res) => {
     }
 });
 
+// --- ENDPOINTS DE PUSH NOTIFICATIONS E ALERTAS ---
+
+app.get('/api/push/vapid-public-key', (req, res) => {
+    if (!process.env.VAPID_PUBLIC_KEY) {
+        return res.status(503).json({ error: 'Push notifications não configuradas no servidor.' });
+    }
+    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
+});
+
+app.post('/api/push/subscribe', async (req, res) => {
+    const { endpoint, keys } = req.body || {};
+    if (!endpoint || !keys?.p256dh || !keys?.auth) {
+        return res.status(400).json({ error: 'Subscription inválida: endpoint e keys (p256dh, auth) são obrigatórios.' });
+    }
+    try {
+        await db.run(
+            'INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?,?,?,?)',
+            [endpoint, keys.p256dh, keys.auth, Date.now()]
+        );
+        const sub = await db.get('SELECT id FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+        res.json({ subscriptionId: sub.id });
+    } catch (err) {
+        console.error("Erro ao salvar subscription:", err.message);
+        res.status(500).json({ error: 'Erro ao salvar subscription.' });
+    }
+});
+
+app.delete('/api/push/subscribe', async (req, res) => {
+    const { endpoint } = req.body || {};
+    if (!endpoint) return res.status(400).json({ error: 'endpoint é obrigatório.' });
+    await db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+    res.json({ ok: true });
+});
+
+app.post('/api/alerts', async (req, res) => {
+    const { endpoint, currency, direction, threshold } = req.body || {};
+    if (!endpoint || !currency || !direction || threshold == null) {
+        return res.status(400).json({ error: 'Campos obrigatórios: endpoint, currency, direction, threshold.' });
+    }
+    if (!['BRL', 'USD'].includes(currency)) {
+        return res.status(400).json({ error: 'currency deve ser BRL ou USD.' });
+    }
+    if (!['above', 'below'].includes(direction)) {
+        return res.status(400).json({ error: 'direction deve ser above ou below.' });
+    }
+    const thresh = parseFloat(threshold);
+    if (isNaN(thresh) || thresh <= 0) {
+        return res.status(400).json({ error: 'threshold deve ser um número positivo.' });
+    }
+    try {
+        const sub = await db.get('SELECT id FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+        if (!sub) return res.status(404).json({ error: 'Subscription não encontrada. Ative as notificações primeiro.' });
+        const result = await db.run(
+            'INSERT INTO price_alerts (subscription_id, currency, direction, threshold, created_at) VALUES (?,?,?,?,?)',
+            [sub.id, currency, direction, thresh, Date.now()]
+        );
+        res.json({ id: result.lastID });
+    } catch (err) {
+        console.error("Erro ao criar alerta:", err.message);
+        res.status(500).json({ error: 'Erro ao criar alerta.' });
+    }
+});
+
+app.get('/api/alerts', async (req, res) => {
+    const { endpoint } = req.query;
+    if (!endpoint) return res.status(400).json({ error: 'Parâmetro endpoint obrigatório.' });
+    try {
+        const sub = await db.get('SELECT id FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+        if (!sub) return res.json([]);
+        const alerts = await db.all(
+            'SELECT id, currency, direction, threshold, created_at, triggered_at, active FROM price_alerts WHERE subscription_id = ? ORDER BY created_at DESC',
+            [sub.id]
+        );
+        res.json(alerts);
+    } catch (err) {
+        res.status(500).json({ error: 'Erro ao listar alertas.' });
+    }
+});
+
+app.delete('/api/alerts/:id', async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'ID inválido.' });
+    await db.run('DELETE FROM price_alerts WHERE id = ?', [id]);
+    res.json({ ok: true });
+});
+
 // --- ROTAS DE PÁGINAS ---
 
 app.get('/', (req, res) => {
@@ -540,6 +720,14 @@ app.get('/dca', (req, res) => {
         page: 'dca',
         title: 'Calculadora DCA de Bitcoin | Simule Dollar Cost Averaging',
         description: 'Use a calculadora de DCA (Dollar Cost Averaging) para simular o resultado de aportes recorrentes em Bitcoin (BTC), em Reais (BRL) ou Dólares (USD). Descubra o melhor dia da semana ou do mês para comprar Bitcoin.',
+    });
+});
+
+app.get('/tv', (req, res) => {
+    res.render('pages/tv', {
+        page: 'tv',
+        title: 'BitPanel TV | Bitcoin em Tela Cheia',
+        description: 'Dashboard Bitcoin para exibição em TV ou monitor.',
     });
 });
 

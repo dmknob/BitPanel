@@ -1,14 +1,15 @@
-const CACHE_NAME = 'bitpanel-cache-v3'; // <--- CACHE_NAME INCREMENTADO NOVAMENTE!
+const CACHE_NAME = 'bitpanel-cache-v4';
 const urlsToCache = [
     '/',
     '/dca',
+    '/tv',
     '/style.css',
     '/js/common.js',
     '/js/dashboard.js',
     '/js/dca.js',
+    '/js/tv.js',
     '/images/icon-192x192.png',
     '/images/icon-512x512.png',
-    // Adicione outros assets estáticos importantes aqui, se houver
 ];
 
 // Evento de Instalação: Salva o App Shell no cache
@@ -56,6 +57,41 @@ self.addEventListener('message', event => {
     }
 });
 
+
+// Evento de Push: Exibe notificação quando o servidor envia um alerta de preço
+self.addEventListener('push', event => {
+    if (!event.data) return;
+    let payload;
+    try {
+        payload = event.data.json();
+    } catch {
+        payload = { title: 'BitPanel', body: event.data.text() };
+    }
+    event.waitUntil(
+        self.registration.showNotification(payload.title || 'BitPanel', {
+            body: payload.body || '',
+            icon: payload.icon || '/images/icon-192x192.png',
+            badge: payload.badge || '/images/icon-192x192.png',
+            data: { url: payload.url || '/' },
+        })
+    );
+});
+
+// Evento de clique na notificação: abre o painel
+self.addEventListener('notificationclick', event => {
+    event.notification.close();
+    const url = event.notification.data?.url || '/';
+    event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
+            for (const client of windowClients) {
+                if (client.url.includes(self.location.origin) && 'focus' in client) {
+                    return client.focus();
+                }
+            }
+            return clients.openWindow(url);
+        })
+    );
+});
 
 // Evento de Fetch: Intercepta as requisições para aplicar estratégias de cache
 self.addEventListener('fetch', event => {

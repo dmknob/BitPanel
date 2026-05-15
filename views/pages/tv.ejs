@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %></title>
+    <meta http-equiv="refresh" content="600">
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        /* Modo TV: sempre escuro, fonte grande, sem scroll */
+        html, body {
+            margin: 0; padding: 0;
+            background: #0a0a0a !important;
+            color: #e0e0e0 !important;
+            height: 100vh;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        .tv-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 32px;
+            border-bottom: 1px solid #333;
+            background: #111;
+        }
+        .tv-logo { color: #ff9900; font-size: 1.8em; font-weight: bold; }
+        .tv-clock { font-size: 1.5em; color: #aaa; font-variant-numeric: tabular-nums; }
+        .tv-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            padding: 24px 32px;
+            height: calc(100vh - 80px);
+            box-sizing: border-box;
+        }
+        .tv-card {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 12px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .tv-card h2 {
+            margin: 0 0 8px 0;
+            font-size: 0.9em;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .tv-value {
+            font-size: 2.8em;
+            font-weight: bold;
+            color: #ff9900;
+            line-height: 1.1;
+        }
+        .tv-value-secondary { font-size: 1.6em; color: #aaa; margin-top: 4px; }
+        .tv-value-small { font-size: 1.2em; color: #888; margin-top: 8px; }
+        .tv-fees { display: flex; gap: 12px; margin-top: 8px; }
+        .tv-fee-item { flex: 1; text-align: center; background: #222; border-radius: 8px; padding: 8px; }
+        .tv-fee-item .tv-fee-label { font-size: 0.75em; color: #666; }
+        .tv-fee-item .tv-fee-val { font-size: 1.3em; font-weight: bold; color: #3498db; }
+        .tv-green { color: #2ecc71; }
+        .tv-red { color: #e74c3c; }
+        .tv-orange { color: #ff9900; }
+        .tv-status {
+            text-align: center;
+            padding: 8px;
+            font-size: 0.8em;
+            color: #555;
+        }
+        /* Fear & Greed color por valor */
+        .fg-extreme-fear { color: #e74c3c; }
+        .fg-fear { color: #e67e22; }
+        .fg-neutral { color: #f39c12; }
+        .fg-greed { color: #2ecc71; }
+        .fg-extreme-greed { color: #1abc9c; }
+    </style>
+</head>
+<body>
+    <div class="tv-header">
+        <span class="tv-logo">₿ BitPanel</span>
+        <span class="tv-clock" id="tv-clock">--:--:--</span>
+    </div>
+    <div class="tv-grid">
+        <!-- BTC BRL -->
+        <div class="tv-card">
+            <h2>Bitcoin / BRL</h2>
+            <div class="tv-value" id="tv-btc-brl">Carregando...</div>
+            <div class="tv-value-secondary" id="tv-btc-usd"></div>
+        </div>
+        <!-- Fear & Greed -->
+        <div class="tv-card">
+            <h2>Índice Medo & Ganância</h2>
+            <div class="tv-value" id="tv-fg-value">--</div>
+            <div class="tv-value-small" id="tv-fg-class"></div>
+        </div>
+        <!-- Mayer Multiple -->
+        <div class="tv-card">
+            <h2>Múltiplo de Mayer</h2>
+            <div class="tv-value" id="tv-mayer">--</div>
+            <div class="tv-value-small">SMA 200 dias</div>
+        </div>
+        <!-- Hash Rate -->
+        <div class="tv-card">
+            <h2>Hash Rate</h2>
+            <div class="tv-value" id="tv-hashrate">--</div>
+            <div class="tv-value-small" id="tv-difficulty"></div>
+        </div>
+        <!-- Mempool fees -->
+        <div class="tv-card">
+            <h2>Taxas do Mempool (sat/vB)</h2>
+            <div class="tv-fees">
+                <div class="tv-fee-item">
+                    <div class="tv-fee-label">Rápida</div>
+                    <div class="tv-fee-val tv-red" id="tv-fee-fast">--</div>
+                </div>
+                <div class="tv-fee-item">
+                    <div class="tv-fee-label">~30 min</div>
+                    <div class="tv-fee-val tv-orange" id="tv-fee-half">--</div>
+                </div>
+                <div class="tv-fee-item">
+                    <div class="tv-fee-label">~1 hora</div>
+                    <div class="tv-fee-val tv-green" id="tv-fee-hour">--</div>
+                </div>
+            </div>
+            <div class="tv-value-small" id="tv-block-height"></div>
+        </div>
+        <!-- Dominância e S2F -->
+        <div class="tv-card">
+            <h2>Dominância BTC &nbsp;·&nbsp; S2F</h2>
+            <div class="tv-value" id="tv-dominance">--</div>
+            <div class="tv-value-secondary" id="tv-s2f"></div>
+        </div>
+    </div>
+    <div class="tv-status" id="tv-last-update">Aguardando dados...</div>
+    <script src="/js/tv.js"></script>
+</body>
+</html>

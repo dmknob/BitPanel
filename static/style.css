@@ -370,5 +370,53 @@ body.dark-mode .chart-btn:hover {
 #btc-hash-rate { color: var(--accent-color-1); }
 #btc-difficulty { font-size: 1.3em; color: var(--text-color); }
 
+/* --- DCA: Comparação e Exportação --- */
+.dca-comparison {
+    margin-top: 15px;
+    padding: 12px;
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    background-color: var(--body-bg);
+}
+
+.dca-comparison h4 {
+    margin: 0 0 10px 0;
+    font-size: 0.9em;
+    color: var(--text-color-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.dca-comparison p {
+    font-size: 1em !important;
+    margin: 6px 0 !important;
+    display: flex;
+    justify-content: space-between;
+}
+
+.dca-export-btns {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
+}
+
+.dca-export-btn {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-color);
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.dca-export-btn:hover {
+    background-color: #ff9900;
+    color: #fff;
+    border-color: #ff9900;
+}
+
 /* EUR price */
 #bitcoin-preco-eur { color: var(--accent-color-2); }

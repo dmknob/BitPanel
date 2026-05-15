@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const bestDayResultsDiv = document.getElementById('best-dca-day-results');
     
     let historicalPrices = [];
+    let lastSimulationResults = null;
+    let lastSimulationPurchases = [];
 
     // --- LÓGICA DO INDEXEDDB ---
     const DB_NAME = 'BitPanelDB';
@@ -84,18 +86,19 @@ document.addEventListener('DOMContentLoaded', () => {
         let totalInvested = 0;
         let totalBtc = 0;
         let lastPurchaseDate = null;
-        
+        const purchases = [];
+
         const priceColumn = params.currency === 'brl' ? 'price_brl' : 'price_usd';
 
         for (const record of historicalPrices) {
             const currentDate = new Date(`${record.date}T00:00:00Z`);
             const price = record[priceColumn];
-            
+
             if (!price) continue;
-            
+
             let shouldInvest = false;
 
-            if (params.frequency === 'daily') { shouldInvest = true; } 
+            if (params.frequency === 'daily') { shouldInvest = true; }
             else if (params.frequency === 'weekly' && currentDate.getUTCDay() === params.dayOfWeek) {
                 if (!lastPurchaseDate || (currentDate.getTime() - lastPurchaseDate.getTime()) >= 604800000) { // 7 dias em ms
                     shouldInvest = true;
@@ -113,31 +116,107 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (shouldInvest) {
+                const btcBought = params.amount / price;
+                purchases.push({
+                    date: record.date,
+                    price: price,
+                    invested: params.amount,
+                    btcBought: btcBought,
+                    cumulativeBtc: 0,
+                    cumulativeInvested: 0,
+                });
                 totalInvested += params.amount;
-                totalBtc += params.amount / price;
+                totalBtc += btcBought;
                 lastPurchaseDate = currentDate;
             }
         }
-        
+
+        // Preenche campos cumulativos
+        let cumBtc = 0, cumInvested = 0;
+        for (const p of purchases) {
+            cumBtc += p.btcBought;
+            cumInvested += p.invested;
+            p.cumulativeBtc = cumBtc;
+            p.cumulativeInvested = cumInvested;
+        }
+
         const latestPrice = historicalPrices.length > 0 ? historicalPrices[historicalPrices.length - 1][priceColumn] : 0;
         const currentValue = totalBtc * latestPrice;
         const gainLoss = currentValue - totalInvested;
         const gainLossPercent = totalInvested > 0 ? (gainLoss / totalInvested) * 100 : 0;
 
-        return { totalInvested, totalBtc, currentValue, gainLoss, gainLossPercent, currency: params.currency };
+        return { totalInvested, totalBtc, currentValue, gainLoss, gainLossPercent, currency: params.currency, purchases, holdValue: totalInvested };
     }
     
     function renderResults(results) {
-        const currencySymbol = results.currency === 'brl' ? 'R$' : '$';
+        lastSimulationResults = results;
+        lastSimulationPurchases = results.purchases || [];
+
+        const sym = results.currency === 'brl' ? 'R$' : '$';
         const locale = results.currency === 'brl' ? 'pt-BR' : 'en-US';
         const gainLossClass = results.gainLoss >= 0 ? 'profit' : 'loss';
+        const holdDiff = results.currentValue - results.holdValue;
+        const holdDiffClass = holdDiff >= 0 ? 'profit' : 'loss';
 
         resultsDiv.innerHTML = `
-            <p>Total Investido: <span>${currencySymbol} ${results.totalInvested.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></p>
+            <p>Total Investido: <span>${sym} ${results.totalInvested.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></p>
             <p>Total de BTC Acumulado: <span>${results.totalBtc.toFixed(8)} BTC</span></p>
-            <p>Valor Atual do Portfólio: <span>${currencySymbol} ${results.currentValue.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></p>
-            <p>Lucro / Prejuízo: <span class="${gainLossClass}">${currencySymbol} ${results.gainLoss.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${results.gainLossPercent.toFixed(2)}%)</span></p>
+            <p>Valor Atual do Portfólio: <span>${sym} ${results.currentValue.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></p>
+            <p>Lucro / Prejuízo: <span class="${gainLossClass}">${sym} ${results.gainLoss.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${results.gainLossPercent.toFixed(2)}%)</span></p>
+            <div class="dca-comparison">
+                <h4>Comparação: DCA BTC vs. Guardar sem Rendimento</h4>
+                <p>DCA Bitcoin: <span class="${gainLossClass}">${sym} ${results.currentValue.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></p>
+                <p>Guardar sem rendimento: <span>${sym} ${results.holdValue.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></p>
+                <p>DCA foi <span class="${holdDiffClass}">${holdDiff >= 0 ? 'melhor' : 'pior'} em ${sym} ${Math.abs(holdDiff).toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></p>
+            </div>
+            <div class="dca-export-btns">
+                <button id="dca-copy-btn" class="dca-export-btn">📋 Copiar Resumo</button>
+                <button id="dca-csv-btn" class="dca-export-btn">⬇ Exportar CSV</button>
+            </div>
         `;
+
+        document.getElementById('dca-copy-btn')?.addEventListener('click', copySummary);
+        document.getElementById('dca-csv-btn')?.addEventListener('click', exportCsv);
+    }
+
+    function copySummary() {
+        if (!lastSimulationResults) return;
+        const r = lastSimulationResults;
+        const sym = r.currency === 'brl' ? 'R$' : '$';
+        const locale = r.currency === 'brl' ? 'pt-BR' : 'en-US';
+        const text = [
+            '📊 *Simulação DCA Bitcoin — BitPanel*',
+            `💰 Total Investido: ${sym} ${r.totalInvested.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,
+            `₿ BTC Acumulado: ${r.totalBtc.toFixed(8)} BTC`,
+            `💵 Valor Atual: ${sym} ${r.currentValue.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,
+            `${r.gainLoss >= 0 ? '📈' : '📉'} Resultado: ${sym} ${r.gainLoss.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${r.gainLossPercent.toFixed(2)}%)`,
+            `🔒 Guardar sem rendimento: ${sym} ${r.holdValue.toLocaleString(locale, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,
+            '',
+            '_Simulado no BitPanel_',
+        ].join('\n');
+
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('dca-copy-btn');
+            if (btn) { btn.textContent = '✅ Copiado!'; setTimeout(() => { btn.textContent = '📋 Copiar Resumo'; }, 2000); }
+        }).catch(() => alert('Não foi possível copiar. Tente manualmente.'));
+    }
+
+    function exportCsv() {
+        if (!lastSimulationPurchases.length) return;
+        const r = lastSimulationResults;
+        const sym = r.currency === 'brl' ? 'BRL' : 'USD';
+        const header = `Data,Preço BTC (${sym}),Aporte (${sym}),BTC Comprado,BTC Acumulado,Investido Acumulado (${sym})`;
+        const rows = lastSimulationPurchases.map(p =>
+            `${p.date},${p.price.toFixed(2)},${p.invested.toFixed(2)},${p.btcBought.toFixed(8)},${p.cumulativeBtc.toFixed(8)},${p.cumulativeInvested.toFixed(2)}`
+        );
+        const csv = [header, ...rows].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'dca-bitcoin-simulacao.csv';
+        a.click();
+        URL.revokeObjectURL(url);
     }
     
     function findBestDcaDay() {
