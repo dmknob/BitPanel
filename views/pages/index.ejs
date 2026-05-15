@@ -61,6 +61,58 @@
     </div>
 
     <div class="indicador">
+        <h2>Stock-to-Flow (S2F) <span class="fonte-api">(Calculado)</span></h2>
+        <p id="btc-s2f-ratio">Carregando...</p>
+        <p class="update-note">Razão entre o estoque total de BTC e a produção anual estimada.</p>
+        <div class="sub-indicador">
+            <h3>Dominância do Bitcoin</h3>
+            <p id="btc-dominance">Carregando...</p>
+            <p class="update-note">% do market cap total de cripto que é Bitcoin.</p>
+        </div>
+    </div>
+
+    <div class="indicador">
+        <h2>Rede: Hash Rate e Dificuldade <span class="fonte-api">(Mempool.space)</span></h2>
+        <div class="sub-indicador">
+            <h3>Hash Rate</h3>
+            <p id="btc-hash-rate">Carregando...</p>
+        </div>
+        <div class="sub-indicador">
+            <h3>Dificuldade de Mineração</h3>
+            <p id="btc-difficulty">Carregando...</p>
+            <p class="update-note" id="btc-difficulty-change"></p>
+        </div>
+        <div class="sub-indicador">
+            <h3>Tempo Médio de Bloco</h3>
+            <p id="btc-avg-block-time">Carregando...</p>
+        </div>
+    </div>
+
+    <div class="indicador">
+        <h2>Preço do Bitcoin (EUR) <span class="fonte-api">(CoinGecko)</span></h2>
+        <p id="bitcoin-preco-eur">Carregando...</p>
+    </div>
+
+    <div class="indicador chart-card">
+        <h2>Histórico de Preços BTC <span class="fonte-api">(CoinGecko)</span></h2>
+        <div class="chart-period-selector">
+            <button class="chart-btn active" data-days="30">30d</button>
+            <button class="chart-btn" data-days="90">90d</button>
+            <button class="chart-btn" data-days="365">365d</button>
+        </div>
+        <div class="chart-container">
+            <canvas id="price-chart"></canvas>
+        </div>
+    </div>
+
+    <div class="indicador chart-card">
+        <h2>Fear & Greed: Últimos 90 dias <span class="fonte-api">(Alternative.me)</span></h2>
+        <div class="chart-container">
+            <canvas id="fear-greed-chart"></canvas>
+        </div>
+    </div>
+
+    <div class="indicador">
         <h2>Calculadora Sats</h2>
         <div class="calculadora-sats-input-group">
             <label for="sats-input">Quantidade de Sats:</label>

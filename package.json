@@ -1,11 +1,12 @@
 {
   "name": "bitpanel",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "description": "Um painel de indicadores sobre Bitcoin com backend em Node.js e banco de dados SQLite.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest --forceExit",
+    "test:coverage": "jest --coverage --forceExit"
   },
   "keywords": [
     "bitcoin",
@@ -17,13 +18,30 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@sentry/node": "^8.0.0",
     "axios": "^1.7.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "ejs": "^3.1.10",
     "express": "^4.19.2",
+    "express-rate-limit": "^7.3.1",
+    "helmet": "^7.1.0",
     "node-cron": "^3.0.3",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "server.js",
+      "!**/node_modules/**"
+    ]
   }
 }

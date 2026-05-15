@@ -319,3 +319,56 @@ body.dark-mode #find-best-dca-day-btn {
         grid-column: auto;
     }
 }
+
+/* --- Gráficos (Chart.js) --- */
+.chart-card {
+    min-width: 380px;
+}
+
+.chart-period-selector {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.chart-btn {
+    padding: 4px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-color-secondary);
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.chart-btn:hover {
+    background-color: #e9ecef;
+    color: var(--text-color);
+}
+
+.chart-btn.active {
+    background-color: #ff9900;
+    color: #fff;
+    border-color: #ff9900;
+    font-weight: bold;
+}
+
+body.dark-mode .chart-btn:hover {
+    background-color: #333;
+    color: #fff;
+}
+
+.chart-container {
+    position: relative;
+    height: 200px;
+}
+
+/* S2F e Dominância */
+#btc-s2f-ratio { color: var(--accent-color-3); }
+#btc-dominance { color: var(--accent-color-2); font-size: 1.4em; }
+#btc-hash-rate { color: var(--accent-color-1); }
+#btc-difficulty { font-size: 1.3em; color: var(--text-color); }
+
+/* EUR price */
+#bitcoin-preco-eur { color: var(--accent-color-2); }

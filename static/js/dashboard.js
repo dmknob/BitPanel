@@ -17,12 +17,22 @@ const satsInputElement = document.getElementById('sats-input');
 const satsToBrlElement = document.getElementById('sats-to-brl');
 const satsToUsdElement = document.getElementById('sats-to-usd');
 const lastUpdateTimeElement = document.getElementById('last-update-time');
+const bitcoinPrecoEurElement = document.getElementById('bitcoin-preco-eur');
+const btcS2fRatioElement = document.getElementById('btc-s2f-ratio');
+const btcDominanceElement = document.getElementById('btc-dominance');
+const btcHashRateElement = document.getElementById('btc-hash-rate');
+const btcDifficultyElement = document.getElementById('btc-difficulty');
+const btcDifficultyChangeElement = document.getElementById('btc-difficulty-change');
+const btcAvgBlockTimeElement = document.getElementById('btc-avg-block-time');
 
 // Variáveis globais
 let currentBitcoinPriceUSD = 0;
 let currentBitcoinPriceBRL = 0;
 const SATS_PER_BTC = 100000000;
 let updateScheduler = null;
+let priceChart = null;
+let fearGreedChart = null;
+let currentChartDays = 30;
 
 // Configurações do Agendador
 const JITTER_MS = 10000; // Variação aleatória de até 10 segundos
@@ -70,7 +80,53 @@ function renderData(data) {
     blockHeightElement.textContent = data.mempool?.block_height?.toLocaleString('pt-BR') || 'N/D';
     totalBtcSupplyElement.textContent = data.mempool?.calculated_supply?.toLocaleString('pt-BR', {maximumFractionDigits: 0}) || 'N/D';
     mempoolTxCountElement.textContent = data.mempool?.tx_count?.toLocaleString('pt-BR') || 'N/D';
-    
+
+    // EUR price
+    if (bitcoinPrecoEurElement) {
+        bitcoinPrecoEurElement.textContent = data.prices?.btc_eur
+            ? `€ ${data.prices.btc_eur.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            : 'N/D';
+    }
+
+    // S2F
+    if (btcS2fRatioElement) {
+        btcS2fRatioElement.textContent = data.globalMetrics?.s2f_ratio != null
+            ? data.globalMetrics.s2f_ratio.toFixed(1)
+            : 'N/D';
+    }
+
+    // Dominância
+    if (btcDominanceElement) {
+        btcDominanceElement.textContent = data.globalMetrics?.btc_dominance_pct != null
+            ? `${data.globalMetrics.btc_dominance_pct.toFixed(2)}%`
+            : 'N/D';
+    }
+
+    // Hash rate
+    if (btcHashRateElement) {
+        btcHashRateElement.textContent = data.network?.hash_rate_eh_s != null
+            ? `${data.network.hash_rate_eh_s.toFixed(2)} EH/s`
+            : 'N/D';
+    }
+
+    // Dificuldade
+    if (btcDifficultyElement) {
+        btcDifficultyElement.textContent = data.network?.difficulty != null
+            ? (data.network.difficulty / 1e12).toFixed(2) + ' T'
+            : 'N/D';
+    }
+    if (btcDifficultyChangeElement && data.network?.difficulty_change_pct != null) {
+        const pct = data.network.difficulty_change_pct;
+        btcDifficultyChangeElement.textContent = `Próximo ajuste estimado: ${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+        btcDifficultyChangeElement.style.color = pct >= 0 ? 'var(--accent-color-2)' : '#dc3545';
+    }
+
+    // Tempo médio de bloco
+    if (btcAvgBlockTimeElement && data.network?.avg_block_time_seconds != null) {
+        const minutes = (data.network.avg_block_time_seconds / 60).toFixed(1);
+        btcAvgBlockTimeElement.textContent = `${minutes} min`;
+    }
+
     if (satsInputElement && satsInputElement.value) calculateSatsConversion();
 }
 
@@ -130,6 +186,143 @@ function calculateSatsConversion() {
     satsToUsdElement.textContent = `$ ${valueInUSD.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })}`;
 }
 
+// --- FUNÇÕES DE GRÁFICO ---
+async function loadPriceChart(days) {
+    currentChartDays = days;
+    const canvas = document.getElementById('price-chart');
+    if (!canvas) return;
+
+    try {
+        const res = await fetch(`/api/historical-prices?days=${days}`);
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length === 0) return;
+
+        const labels = data.map(d => d.date);
+        const prices = data.map(d => d.price_usd);
+
+        if (priceChart) priceChart.destroy();
+        const isDark = document.body.classList.contains('dark-mode');
+        const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+        const textColor = isDark ? '#a0a0a0' : '#555';
+
+        priceChart = new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'BTC/USD',
+                    data: prices,
+                    borderColor: '#ff9900',
+                    backgroundColor: 'rgba(255,153,0,0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: true,
+                    tension: 0.3,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => `$ ${ctx.raw.toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        ticks: {
+                            maxTicksLimit: 6,
+                            color: textColor,
+                            maxRotation: 0,
+                        },
+                        grid: { color: gridColor },
+                    },
+                    y: {
+                        ticks: {
+                            color: textColor,
+                            callback: v => `$${(v / 1000).toFixed(0)}k`,
+                        },
+                        grid: { color: gridColor },
+                    },
+                },
+            },
+        });
+    } catch (e) {
+        console.error('Erro ao carregar gráfico de preços:', e);
+    }
+}
+
+async function loadFearGreedChart() {
+    const canvas = document.getElementById('fear-greed-chart');
+    if (!canvas) return;
+    try {
+        const res = await fetch('/api/fear-greed-history');
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length === 0) return;
+
+        const labels = data.map(d => d.date);
+        const values = data.map(d => d.value);
+
+        const colors = values.map(v => {
+            if (v <= 25) return '#dc3545';      // Extreme Fear
+            if (v <= 45) return '#fd7e14';      // Fear
+            if (v <= 55) return '#ffc107';      // Neutral
+            if (v <= 75) return '#28a745';      // Greed
+            return '#20c997';                   // Extreme Greed
+        });
+
+        if (fearGreedChart) fearGreedChart.destroy();
+        const isDark = document.body.classList.contains('dark-mode');
+        const textColor = isDark ? '#a0a0a0' : '#555';
+        const gridColor = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+
+        fearGreedChart = new Chart(canvas, {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Fear & Greed',
+                    data: values,
+                    backgroundColor: colors,
+                    borderRadius: 2,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                const d = data[ctx.dataIndex];
+                                return `${d.value} — ${d.classification}`;
+                            },
+                        },
+                    },
+                },
+                scales: {
+                    x: {
+                        ticks: { maxTicksLimit: 6, color: textColor, maxRotation: 0 },
+                        grid: { color: gridColor },
+                    },
+                    y: {
+                        min: 0,
+                        max: 100,
+                        ticks: { color: textColor },
+                        grid: { color: gridColor },
+                    },
+                },
+            },
+        });
+    } catch (e) {
+        console.error('Erro ao carregar gráfico Fear & Greed:', e);
+    }
+}
+
 // --- INICIALIZAÇÃO DA PÁGINA ---
 document.addEventListener('DOMContentLoaded', () => {
     try {
@@ -141,9 +334,31 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
         console.error("Não foi possível ler os dados do cache:", e);
     }
-    fetchAllData(); 
+    fetchAllData();
+
+    // Inicializar gráficos
+    loadPriceChart(30);
+    loadFearGreedChart();
+
+    // Seletores de período do gráfico de preços
+    document.querySelectorAll('.chart-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.chart-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            loadPriceChart(parseInt(btn.dataset.days));
+        });
+    });
+
+    // Recriar gráficos quando o tema mudar
+    document.getElementById('checkbox')?.addEventListener('change', () => {
+        setTimeout(() => {
+            if (priceChart) loadPriceChart(currentChartDays);
+            if (fearGreedChart) loadFearGreedChart();
+        }, 350);
+    });
+
     if (satsInputElement) {
         satsInputElement.addEventListener('input', calculateSatsConversion);
-        calculateSatsConversion(); 
+        calculateSatsConversion();
     }
 });
