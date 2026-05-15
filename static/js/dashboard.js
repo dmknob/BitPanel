@@ -25,6 +25,14 @@ const btcDifficultyElement = document.getElementById('btc-difficulty');
 const btcDifficultyChangeElement = document.getElementById('btc-difficulty-change');
 const btcAvgBlockTimeElement = document.getElementById('btc-avg-block-time');
 
+// Portfólio
+const portfolioBtcInput = document.getElementById('portfolio-btc');
+const portfolioAvgPriceInput = document.getElementById('portfolio-avg-price');
+const portfolioSaveBtn = document.getElementById('portfolio-save-btn');
+const portfolioCurrentValueEl = document.getElementById('portfolio-current-value');
+const portfolioPlEl = document.getElementById('portfolio-pl');
+const portfolioPlPctEl = document.getElementById('portfolio-pl-pct');
+
 // Variáveis globais
 let currentBitcoinPriceUSD = 0;
 let currentBitcoinPriceBRL = 0;
@@ -128,6 +136,9 @@ function renderData(data) {
     }
 
     if (satsInputElement && satsInputElement.value) calculateSatsConversion();
+
+    // Atualiza portfólio com preço atual
+    renderPortfolio();
 }
 
 // --- LÓGICA DE ATUALIZAÇÃO INTELIGENTE ---
@@ -323,6 +334,193 @@ async function loadFearGreedChart() {
     }
 }
 
+// --- PORTFÓLIO PESSOAL ---
+function loadPortfolioInputs() {
+    const btc = localStorage.getItem('portfolio_btc');
+    const avg = localStorage.getItem('portfolio_avg_brl');
+    if (btc && portfolioBtcInput) portfolioBtcInput.value = btc;
+    if (avg && portfolioAvgPriceInput) portfolioAvgPriceInput.value = avg;
+}
+
+function renderPortfolio() {
+    const btc = parseFloat(localStorage.getItem('portfolio_btc')) || 0;
+    const avgBrl = parseFloat(localStorage.getItem('portfolio_avg_brl')) || 0;
+    if (!portfolioCurrentValueEl) return;
+    if (btc <= 0 || currentBitcoinPriceBRL <= 0) {
+        portfolioCurrentValueEl.textContent = btc > 0 ? 'Aguardando cotação...' : 'Configure seu portfólio abaixo';
+        if (portfolioPlEl) portfolioPlEl.textContent = '';
+        if (portfolioPlPctEl) portfolioPlPctEl.textContent = '';
+        return;
+    }
+    const currentValueBrl = btc * currentBitcoinPriceBRL;
+    const currentValueUsd = btc * currentBitcoinPriceUSD;
+    const costBasis = btc * avgBrl;
+    const pl = currentValueBrl - costBasis;
+    const plPct = costBasis > 0 ? (pl / costBasis) * 100 : 0;
+    const plClass = pl >= 0 ? 'profit' : 'loss';
+
+    portfolioCurrentValueEl.textContent = `R$ ${currentValueBrl.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})} · $ ${currentValueUsd.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+    if (portfolioPlEl) {
+        portfolioPlEl.className = plClass;
+        portfolioPlEl.textContent = avgBrl > 0
+            ? `P&L: ${pl >= 0 ? '+' : ''}R$ ${pl.toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2})}`
+            : '';
+    }
+    if (portfolioPlPctEl) {
+        portfolioPlPctEl.textContent = avgBrl > 0 ? `${pl >= 0 ? '+' : ''}${plPct.toFixed(2)}%` : '';
+    }
+}
+
+// --- PUSH NOTIFICATIONS / ALERTAS ---
+let pushSubscription = null;
+
+async function initAlerts() {
+    const statusEl = document.getElementById('alerts-support-msg');
+    const enableBtn = document.getElementById('alerts-enable-btn');
+    const disableBtn = document.getElementById('alerts-disable-btn');
+    const formEl = document.getElementById('alerts-form');
+
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        if (statusEl) statusEl.textContent = 'Push Notifications não suportadas neste navegador.';
+        return;
+    }
+
+    // Verificar se notificações já estão ativas
+    const perm = Notification.permission;
+    const storedEndpoint = localStorage.getItem('push_endpoint');
+
+    if (perm === 'granted' && storedEndpoint) {
+        if (statusEl) statusEl.textContent = '🔔 Notificações ativas';
+        if (enableBtn) enableBtn.style.display = 'none';
+        if (disableBtn) disableBtn.style.display = 'inline-block';
+        if (formEl) formEl.style.display = 'block';
+        loadAlertsList(storedEndpoint);
+    } else if (perm === 'denied') {
+        if (statusEl) statusEl.textContent = '🚫 Notificações bloqueadas no navegador. Habilite nas configurações do site.';
+    } else {
+        if (statusEl) statusEl.textContent = 'Ative as notificações para receber alertas de preço.';
+        if (enableBtn) enableBtn.style.display = 'inline-block';
+    }
+
+    enableBtn?.addEventListener('click', enablePushNotifications);
+    disableBtn?.addEventListener('click', disablePushNotifications);
+    document.getElementById('alert-add-btn')?.addEventListener('click', addAlert);
+}
+
+async function enablePushNotifications() {
+    try {
+        const keyRes = await fetch('/api/push/vapid-public-key');
+        if (!keyRes.ok) {
+            alert('Servidor não suporta push notifications. Configure VAPID_PUBLIC_KEY no .env.');
+            return;
+        }
+        const { publicKey } = await keyRes.json();
+
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') {
+            alert('Permissão de notificação negada.');
+            return;
+        }
+
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+        });
+
+        const res = await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sub.toJSON()),
+        });
+        if (!res.ok) throw new Error('Erro ao registrar no servidor.');
+
+        pushSubscription = sub;
+        localStorage.setItem('push_endpoint', sub.endpoint);
+
+        document.getElementById('alerts-support-msg').textContent = '🔔 Notificações ativas';
+        document.getElementById('alerts-enable-btn').style.display = 'none';
+        document.getElementById('alerts-disable-btn').style.display = 'inline-block';
+        document.getElementById('alerts-form').style.display = 'block';
+        loadAlertsList(sub.endpoint);
+    } catch (e) {
+        console.error('Erro ao ativar push:', e);
+        alert('Erro ao ativar notificações: ' + e.message);
+    }
+}
+
+async function disablePushNotifications() {
+    const endpoint = localStorage.getItem('push_endpoint');
+    if (endpoint) {
+        await fetch('/api/push/subscribe', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ endpoint }),
+        }).catch(() => {});
+    }
+    localStorage.removeItem('push_endpoint');
+    document.getElementById('alerts-support-msg').textContent = 'Notificações desativadas.';
+    document.getElementById('alerts-enable-btn').style.display = 'inline-block';
+    document.getElementById('alerts-disable-btn').style.display = 'none';
+    document.getElementById('alerts-form').style.display = 'none';
+    document.getElementById('alerts-list').innerHTML = '';
+}
+
+async function addAlert() {
+    const endpoint = localStorage.getItem('push_endpoint');
+    if (!endpoint) { alert('Ative as notificações primeiro.'); return; }
+
+    const currency = document.getElementById('alert-currency')?.value;
+    const direction = document.getElementById('alert-direction')?.value;
+    const threshold = parseFloat(document.getElementById('alert-threshold')?.value);
+
+    if (!threshold || threshold <= 0) { alert('Digite um valor de referência válido.'); return; }
+
+    const res = await fetch('/api/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint, currency, direction, threshold }),
+    });
+    if (!res.ok) { const d = await res.json(); alert(d.error || 'Erro ao criar alerta.'); return; }
+
+    document.getElementById('alert-threshold').value = '';
+    loadAlertsList(endpoint);
+}
+
+async function loadAlertsList(endpoint) {
+    const listEl = document.getElementById('alerts-list');
+    if (!listEl) return;
+    try {
+        const res = await fetch(`/api/alerts?endpoint=${encodeURIComponent(endpoint)}`);
+        const alerts = await res.json();
+        if (!alerts.length) { listEl.innerHTML = '<p style="font-size:0.85em; color: var(--text-color-secondary);">Nenhum alerta configurado.</p>'; return; }
+        listEl.innerHTML = alerts.map(a => {
+            const sym = a.currency === 'USD' ? '$' : 'R$';
+            const dir = a.direction === 'above' ? '↑ acima de' : '↓ abaixo de';
+            const status = a.active ? '🔔' : '✅ disparado';
+            return `<div class="alert-item">
+                <span>${status} BTC/${a.currency} ${dir} ${sym}${Number(a.threshold).toLocaleString('pt-BR')}</span>
+                ${a.active ? `<button class="alert-delete-btn" data-id="${a.id}">✕</button>` : ''}
+            </div>`;
+        }).join('');
+        listEl.querySelectorAll('.alert-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                await fetch(`/api/alerts/${btn.dataset.id}`, { method: 'DELETE' });
+                loadAlertsList(endpoint);
+            });
+        });
+    } catch (e) {
+        listEl.innerHTML = '<p style="font-size:0.85em;">Erro ao carregar alertas.</p>';
+    }
+}
+
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
 // --- INICIALIZAÇÃO DA PÁGINA ---
 document.addEventListener('DOMContentLoaded', () => {
     try {
@@ -335,6 +533,23 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error("Não foi possível ler os dados do cache:", e);
     }
     fetchAllData();
+
+    // Portfólio
+    loadPortfolioInputs();
+    renderPortfolio();
+
+    portfolioSaveBtn?.addEventListener('click', () => {
+        const btc = parseFloat(portfolioBtcInput?.value) || 0;
+        const avg = parseFloat(portfolioAvgPriceInput?.value) || 0;
+        localStorage.setItem('portfolio_btc', btc);
+        localStorage.setItem('portfolio_avg_brl', avg);
+        renderPortfolio();
+        portfolioSaveBtn.textContent = '✅ Salvo!';
+        setTimeout(() => { portfolioSaveBtn.textContent = 'Salvar'; }, 1500);
+    });
+
+    // Alertas de preço
+    initAlerts();
 
     // Inicializar gráficos
     loadPriceChart(30);

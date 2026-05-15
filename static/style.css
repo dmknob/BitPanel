@@ -420,3 +420,37 @@ body.dark-mode .chart-btn:hover {
 
 /* EUR price */
 #bitcoin-preco-eur { color: var(--accent-color-2); }
+
+/* --- Portfólio --- */
+.portfolio-form { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border-color); }
+.portfolio-form-row { display: flex; flex-direction: column; margin-bottom: 10px; }
+.portfolio-form-row label { font-size: 0.85em; color: var(--text-color-secondary); margin-bottom: 4px; }
+.portfolio-form-row input,
+.portfolio-form-row select { padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.95em; background: var(--body-bg); color: var(--text-color); }
+#portfolio-save-btn, #alert-add-btn {
+    width: 100%; padding: 10px; margin-top: 4px;
+    background: #ff9900; color: #fff; border: none;
+    border-radius: 6px; cursor: pointer; font-size: 0.95em; font-weight: bold;
+    transition: background-color 0.2s;
+}
+#portfolio-save-btn:hover, #alert-add-btn:hover { background: #e08800; }
+#portfolio-current-value { font-size: 1.3em; }
+.profit { color: var(--accent-color-2) !important; }
+.loss { color: #dc3545 !important; }
+
+/* --- Alertas --- */
+#alerts-enable-btn, #alerts-disable-btn {
+    padding: 8px 16px; border-radius: 6px; border: none;
+    cursor: pointer; font-size: 0.9em; margin-top: 8px;
+    background: #ff9900; color: #fff;
+}
+#alerts-disable-btn { background: #555; }
+.alert-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px; border-bottom: 1px dashed var(--border-color);
+    font-size: 0.9em;
+}
+.alert-delete-btn {
+    background: none; border: none; color: #dc3545;
+    cursor: pointer; font-size: 1em; padding: 0 4px;
+}

@@ -112,6 +112,57 @@
         </div>
     </div>
 
+    <div class="indicador" id="portfolio-card">
+        <h2>Meu Portfólio <span class="fonte-api">(Local)</span></h2>
+        <div id="portfolio-display">
+            <p id="portfolio-current-value">Configure seu portfólio abaixo</p>
+            <p id="portfolio-pl" style="font-size: 1em; font-weight: normal;"></p>
+            <p class="update-note" id="portfolio-pl-pct"></p>
+        </div>
+        <div class="portfolio-form">
+            <div class="portfolio-form-row">
+                <label for="portfolio-btc">BTC que você possui:</label>
+                <input type="number" id="portfolio-btc" placeholder="ex: 0.05" min="0" step="any">
+            </div>
+            <div class="portfolio-form-row">
+                <label for="portfolio-avg-price">Preço médio de compra (BRL):</label>
+                <input type="number" id="portfolio-avg-price" placeholder="ex: 450000" min="0" step="any">
+            </div>
+            <button id="portfolio-save-btn">Salvar</button>
+        </div>
+    </div>
+
+    <div class="indicador" id="alerts-card">
+        <h2>Alertas de Preço <span class="fonte-api">(Push)</span></h2>
+        <div id="alerts-push-status">
+            <p id="alerts-support-msg" style="font-size:0.9em; color: var(--text-color-secondary);">Verificando suporte...</p>
+            <button id="alerts-enable-btn" style="display:none;">🔔 Ativar Notificações</button>
+            <button id="alerts-disable-btn" style="display:none;">🔕 Desativar Notificações</button>
+        </div>
+        <div id="alerts-form" style="display:none;">
+            <div class="portfolio-form-row" style="margin-top:10px;">
+                <label for="alert-currency">Moeda:</label>
+                <select id="alert-currency">
+                    <option value="BRL">BRL (R$)</option>
+                    <option value="USD">USD ($)</option>
+                </select>
+            </div>
+            <div class="portfolio-form-row">
+                <label for="alert-direction">Disparar quando preço:</label>
+                <select id="alert-direction">
+                    <option value="above">Subir acima de</option>
+                    <option value="below">Cair abaixo de</option>
+                </select>
+            </div>
+            <div class="portfolio-form-row">
+                <label for="alert-threshold">Valor de referência:</label>
+                <input type="number" id="alert-threshold" placeholder="ex: 500000" min="0" step="any">
+            </div>
+            <button id="alert-add-btn">+ Adicionar Alerta</button>
+        </div>
+        <div id="alerts-list" style="margin-top:12px;"></div>
+    </div>
+
     <div class="indicador">
         <h2>Calculadora Sats</h2>
         <div class="calculadora-sats-input-group">
