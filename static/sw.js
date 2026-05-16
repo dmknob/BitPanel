@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bitpanel-cache-v4';
+const CACHE_NAME = 'bitpanel-cache-v5';
 const urlsToCache = [
     '/',
     '/dca',

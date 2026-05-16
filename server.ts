@@ -1,5 +1,7 @@
 // 1. Imports
+const http = require('http');
 const express = require('express');
+const { WebSocketServer } = require('ws');
 const axios = require('axios');
 const cors = require('cors');
 const cron = require('node-cron');
@@ -10,8 +12,117 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
+import type { Request, Response, NextFunction } from 'express';
+
+// --- TIPOS ---
+
+interface PriceRow {
+    symbol: string;
+    price: number;
+    last_updated: number;
+}
+
+interface MempoolRow {
+    fastest_fee: number;
+    half_hour_fee: number;
+    hour_fee: number;
+    block_height: number;
+    tx_count: number;
+    calculated_supply: number;
+    last_updated: number;
+}
+
+interface NetworkMetricsRow {
+    hash_rate_eh_s: number;
+    difficulty: number;
+    difficulty_change_pct: number;
+    avg_block_time_seconds: number;
+    last_updated: number;
+}
+
+interface DominanceRow {
+    dominance_pct: number;
+    last_updated: number;
+}
+
+interface FearGreedRow {
+    date: string;
+    value: number;
+    classification: string;
+    last_updated: number;
+}
+
+interface DailyPriceRow {
+    price_usd: number;
+}
+
+interface LightningRow {
+    capacity_btc: number | null;
+    channels: number | null;
+    nodes: number | null;
+    last_updated: number;
+}
+
+interface GlobalMetricsRow {
+    timestamp: number;
+    market_cap_usd: number;
+}
+
+interface PriceAlertRow {
+    id: number;
+    currency: string;
+    direction: string;
+    threshold: number;
+    endpoint: string;
+    p256dh: string;
+    auth: string;
+}
+
+interface ApiDataPayload {
+    lastUpdateTimestamp: number;
+    timeUntilNextUpdate: number;
+    prices: {
+        btc_usd: number | undefined;
+        btc_brl: number | undefined;
+        btc_eur: number | undefined;
+        usdt_brl: number | undefined;
+    };
+    mempool: {
+        fastest_fee: number | undefined;
+        half_hour_fee: number | undefined;
+        hour_fee: number | undefined;
+        block_height: number | undefined;
+        tx_count: number | undefined;
+        calculated_supply: number | undefined;
+    };
+    fearGreed: {
+        value: number | undefined;
+        classification: string | undefined;
+        last_updated: number | undefined;
+    };
+    globalMetrics: {
+        market_cap_usd: number | null | undefined;
+        mayer_multiple: number | null;
+        btc_dominance_pct: number | null;
+        s2f_ratio: number | null;
+    };
+    network: {
+        hash_rate_eh_s: number | null;
+        difficulty: number | null;
+        difficulty_change_pct: number | null;
+        avg_block_time_seconds: number | null;
+        last_updated: number | null;
+    };
+    lightning: {
+        capacity_btc: number | null;
+        channels: number | null;
+        nodes: number | null;
+        last_updated: number | null;
+    };
+}
+
 // web-push (opcional — ativo somente se VAPID_PUBLIC_KEY estiver definido no .env)
-let webpush = null;
+let webpush: any = null;
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
     webpush = require('web-push');
     webpush.setVapidDetails(
@@ -22,24 +133,26 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
 }
 
 // Sentry (opcional — ativo somente se SENTRY_DSN estiver definido no .env)
-let Sentry = null;
+let Sentry: any = null;
 if (process.env.SENTRY_DSN) {
     Sentry = require('@sentry/node');
     Sentry.init({ dsn: process.env.SENTRY_DSN, tracesSampleRate: 0.1 });
 }
 
 // --- VARIÁVEIS GLOBAIS ---
-let db;
-let initialDataLoadPromise = null;
+let db: any;
+let initialDataLoadPromise: Promise<any> | null = null;
+let wsClients: Set<any> = new Set();
+let wss: any = null;
 
 // --- CONFIGURAÇÃO DE INTERVALO ---
-const UPDATE_INTERVAL_SECONDS = parseInt(process.env.UPDATE_INTERVAL_SECONDS) || 600;
-const UPDATE_INTERVAL_MS = UPDATE_INTERVAL_SECONDS * 1000;
-const cronIntervalMinutes = Math.max(1, Math.round(UPDATE_INTERVAL_SECONDS / 60));
-const CRON_SCHEDULE_HIGH_FREQUENCY = `*/${cronIntervalMinutes} * * * *`;
+const UPDATE_INTERVAL_SECONDS: number = parseInt(process.env.UPDATE_INTERVAL_SECONDS || '600') || 600;
+const UPDATE_INTERVAL_MS: number = UPDATE_INTERVAL_SECONDS * 1000;
+const cronIntervalMinutes: number = Math.max(1, Math.round(UPDATE_INTERVAL_SECONDS / 60));
+const CRON_SCHEDULE_HIGH_FREQUENCY: string = `*/${cronIntervalMinutes} * * * *`;
 
 // --- VALIDAÇÃO DE VARIÁVEIS DE AMBIENTE ---
-function validateEnv() {
+function validateEnv(): void {
     const required = ['COINGECKO_API_KEY'];
     const missing = required.filter(k => !process.env[k] || process.env[k] === 'SUA_API_KEY_AQUI');
     if (missing.length) {
@@ -51,13 +164,13 @@ function validateEnv() {
 // --- CLIENTE HTTP COM TIMEOUT ---
 const httpClient = axios.create({ timeout: 10_000 });
 
-const COINGECKO_HEADERS = () => ({ 'x-cg-demo-api-key': process.env.COINGECKO_API_KEY });
+const COINGECKO_HEADERS = (): Record<string, string> => ({ 'x-cg-demo-api-key': process.env.COINGECKO_API_KEY as string });
 
-async function fetchWithRetry(url, options = {}, retries = 3) {
+async function fetchWithRetry(url: string, options: object = {}, retries: number = 3): Promise<any> {
     for (let attempt = 0; attempt < retries; attempt++) {
         try {
             return await httpClient.get(url, options);
-        } catch (err) {
+        } catch (err: any) {
             if (attempt === retries - 1) throw err;
             await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
         }
@@ -65,7 +178,7 @@ async function fetchWithRetry(url, options = {}, retries = 3) {
 }
 
 // --- BANCO DE DADOS + MIGRATIONS ---
-async function initializeDatabase() {
+async function initializeDatabase(): Promise<void> {
     try {
         db = await open({
             filename: path.join(__dirname, process.env.DB_NAME || 'bitpanel.sqlite'),
@@ -79,7 +192,7 @@ async function initializeDatabase() {
     }
 }
 
-async function runMigrations(db) {
+async function runMigrations(db: any): Promise<void> {
     const { user_version: version } = await db.get('PRAGMA user_version');
 
     if (version < 1) {
@@ -164,11 +277,25 @@ async function runMigrations(db) {
         await db.run('PRAGMA user_version = 3');
         console.log("Migration 3: Tabelas de push notifications e alertas criadas.");
     }
+
+    if (version < 4) {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS lightning_snapshot (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                capacity_btc REAL,
+                channels INTEGER,
+                nodes INTEGER,
+                last_updated INTEGER NOT NULL
+            );
+        `);
+        await db.run('PRAGMA user_version = 4');
+        console.log("Migration 4: Tabela de Lightning Network criada.");
+    }
 }
 
 // --- FUNÇÕES PURAS DE CÁLCULO ---
 
-function calculateBitcoinSupply(blockHeight) {
+function calculateBitcoinSupply(blockHeight: number): number {
     let supply = 0;
     let reward = 50;
     const halvingInterval = 210_000;
@@ -182,7 +309,7 @@ function calculateBitcoinSupply(blockHeight) {
     return supply;
 }
 
-function calculateStockToFlow(supply, blockHeight) {
+function calculateStockToFlow(supply: number, blockHeight: number): number | null {
     const halvingInterval = 210_000;
     const epoch = Math.floor(blockHeight / halvingInterval);
     const blockReward = 50 / Math.pow(2, epoch);
@@ -194,7 +321,7 @@ function calculateStockToFlow(supply, blockHeight) {
 
 // --- WORKERS ---
 
-async function updateHighFrequencyData() {
+async function updateHighFrequencyData(): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
     console.log(`[${ts}] Worker: Buscando dados de alta frequência (Preços, Mempool)...`);
     try {
@@ -207,10 +334,10 @@ async function updateHighFrequencyData() {
 
         const now = Date.now();
         const p = pricesRes.data;
-        const btcUsd = p?.bitcoin?.usd;
-        const btcBrl = p?.bitcoin?.brl;
-        const btcEur = p?.bitcoin?.eur ?? null;
-        const usdtBrl = p?.tether?.brl;
+        const btcUsd: number = p?.bitcoin?.usd;
+        const btcBrl: number = p?.bitcoin?.brl;
+        const btcEur: number | null = p?.bitcoin?.eur ?? null;
+        const usdtBrl: number = p?.tether?.brl;
 
         if (typeof btcUsd !== 'number' || typeof btcBrl !== 'number') {
             throw new Error(`Resposta CoinGecko incompleta: ${JSON.stringify(p)}`);
@@ -221,9 +348,9 @@ async function updateHighFrequencyData() {
         await db.run('INSERT OR REPLACE INTO current_prices (symbol, price, last_updated) VALUES (?,?,?)', ['BTC-EUR', btcEur, now]);
         await db.run('INSERT OR REPLACE INTO current_prices (symbol, price, last_updated) VALUES (?,?,?)', ['USDT-BRL', usdtBrl, now]);
 
-        const blockHeight = heightRes.data;
-        const supply = calculateBitcoinSupply(blockHeight);
-        const marketCap = btcUsd * supply;
+        const blockHeight: number = heightRes.data;
+        const supply: number = calculateBitcoinSupply(blockHeight);
+        const marketCap: number = btcUsd * supply;
 
         await db.run(
             `INSERT OR REPLACE INTO mempool_snapshot (id, fastest_fee, half_hour_fee, hour_fee, block_height, tx_count, calculated_supply, last_updated) VALUES (1,?,?,?,?,?,?,?)`,
@@ -232,41 +359,42 @@ async function updateHighFrequencyData() {
         await db.run('INSERT INTO btc_global_metrics_history (timestamp, market_cap_usd) VALUES (?,?)', [now, marketCap]);
         await checkAndSendAlerts({ btc_usd: btcUsd, btc_brl: btcBrl });
         console.log(`[${ts}] Worker: Dados de alta frequência salvos com sucesso.`);
-    } catch (err) {
+        broadcastUpdate().catch(() => {});
+    } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar dados de alta frequência:`, err.message);
         if (Sentry) Sentry.captureException(err);
     }
 }
 
-async function updateNetworkMetrics() {
+async function updateNetworkMetrics(): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
     console.log(`[${ts}] Worker: Buscando métricas de rede Bitcoin...`);
     try {
         const res = await fetchWithRetry('https://mempool.space/api/v1/difficulty-adjustment');
         const d = res.data;
-        const timeAvgSeconds = (d.timeAvg || 600_000) / 1000;
-        const difficulty = d.currentDifficulty;
+        const timeAvgSeconds: number = (d.timeAvg || 600_000) / 1000;
+        const difficulty: number = d.currentDifficulty;
         // Hash rate em EH/s: (difficulty * 2^32) / timeAvgSegundos / 1e18
-        const hashRateEHs = (difficulty * Math.pow(2, 32)) / (timeAvgSeconds * 1e18);
-        const difficultyChangePct = d.difficultyChange ?? null;
+        const hashRateEHs: number = (difficulty * Math.pow(2, 32)) / (timeAvgSeconds * 1e18);
+        const difficultyChangePct: number | null = d.difficultyChange ?? null;
 
         await db.run(
             `INSERT OR REPLACE INTO network_metrics_snapshot (id, hash_rate_eh_s, difficulty, difficulty_change_pct, avg_block_time_seconds, last_updated) VALUES (1,?,?,?,?,?)`,
             [hashRateEHs, difficulty, difficultyChangePct, timeAvgSeconds, Date.now()]
         );
         console.log(`[${ts}] Worker: Métricas de rede salvas. Hash rate: ${hashRateEHs.toFixed(2)} EH/s`);
-    } catch (err) {
+    } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar métricas de rede:`, err.message);
         if (Sentry) Sentry.captureException(err);
     }
 }
 
-async function updateDominanceData() {
+async function updateDominanceData(): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
     console.log(`[${ts}] Worker: Buscando dominância do Bitcoin...`);
     try {
         const res = await fetchWithRetry('https://api.coingecko.com/api/v3/global', { headers: COINGECKO_HEADERS() });
-        const dominancePct = res.data?.data?.market_cap_percentage?.btc;
+        const dominancePct: number = res.data?.data?.market_cap_percentage?.btc;
         if (typeof dominancePct !== 'number') throw new Error('Dominância não retornada pela API');
 
         await db.run(
@@ -274,13 +402,13 @@ async function updateDominanceData() {
             [dominancePct, Date.now()]
         );
         console.log(`[${ts}] Worker: Dominância BTC: ${dominancePct.toFixed(2)}%`);
-    } catch (err) {
+    } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar dominância:`, err.message);
         if (Sentry) Sentry.captureException(err);
     }
 }
 
-async function updateFearGreedData() {
+async function updateFearGreedData(): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
     try {
         console.log(`[${ts}] Worker: Buscando Fear & Greed Index...`);
@@ -292,13 +420,34 @@ async function updateFearGreedData() {
             [today, fng.value, fng.value_classification, Date.now()]
         );
         console.log(`[${ts}] Worker: Fear & Greed Index salvo para ${today}.`);
-    } catch (err) {
+    } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar Fear & Greed:`, err.message);
         if (Sentry) Sentry.captureException(err);
     }
 }
 
-async function syncHistoricDataOnStartup() {
+async function updateLightningData(): Promise<void> {
+    const ts = new Date().toLocaleString('pt-BR');
+    console.log(`[${ts}] Worker: Buscando métricas da Lightning Network...`);
+    try {
+        const res = await fetchWithRetry('https://mempool.space/api/v1/lightning/statistics/latest');
+        const d = res.data;
+        const capacityBtc: number | null = d.latest?.total_capacity != null ? d.latest.total_capacity / 1e8 : null;
+        const channels: number | null = d.latest?.channel_count ?? null;
+        const nodes: number | null = d.latest?.node_count ?? null;
+
+        await db.run(
+            `INSERT OR REPLACE INTO lightning_snapshot (id, capacity_btc, channels, nodes, last_updated) VALUES (1,?,?,?,?)`,
+            [capacityBtc, channels, nodes, Date.now()]
+        );
+        console.log(`[${ts}] Worker: Lightning Network — ${capacityBtc?.toFixed(0)} BTC em ${channels?.toLocaleString()} canais.`);
+    } catch (err: any) {
+        console.error(`[${ts}] Worker: ERRO ao buscar dados da Lightning Network:`, err.message);
+        if (Sentry) Sentry.captureException(err);
+    }
+}
+
+async function syncHistoricDataOnStartup(): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
     console.log(`[${ts}] Worker (Inicialização): Sincronizando histórico de preços (USD & BRL)...`);
     try {
@@ -307,21 +456,21 @@ async function syncHistoricDataOnStartup() {
             fetchWithRetry('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=brl&days=365&interval=daily', { headers: COINGECKO_HEADERS() }),
         ]);
 
-        const usdPrices = usdRes.data.prices;
-        const brlPrices = brlRes.data.prices;
+        const usdPrices: [number, number][] = usdRes.data.prices;
+        const brlPrices: [number, number][] = brlRes.data.prices;
 
         if (!usdPrices?.length || !brlPrices?.length) {
             throw new Error("Histórico vazio retornado pela CoinGecko.");
         }
 
-        const combined = new Map();
-        for (const [ts, price] of usdPrices) {
-            const date = new Date(ts).toISOString().split('T')[0];
+        const combined = new Map<string, { date: string; price_usd?: number; price_brl?: number }>();
+        for (const [timestamp, price] of usdPrices) {
+            const date = new Date(timestamp).toISOString().split('T')[0];
             combined.set(date, { date, price_usd: price });
         }
-        for (const [ts, price] of brlPrices) {
-            const date = new Date(ts).toISOString().split('T')[0];
-            if (combined.has(date)) combined.get(date).price_brl = price;
+        for (const [timestamp, price] of brlPrices) {
+            const date = new Date(timestamp).toISOString().split('T')[0];
+            if (combined.has(date)) combined.get(date)!.price_brl = price;
         }
 
         const stmt = await db.prepare('INSERT OR IGNORE INTO btc_daily_close_prices (date, price_usd, price_brl) VALUES (?,?,?)');
@@ -334,13 +483,13 @@ async function syncHistoricDataOnStartup() {
         }
         await stmt.finalize();
         console.log(`[${ts}] Worker (Inicialização): ${inserted} novos registros históricos adicionados.`);
-    } catch (err) {
+    } catch (err: any) {
         console.error(`[${ts}] Worker (Inicialização): ERRO ao sincronizar histórico:`, err.message);
         if (Sentry) Sentry.captureException(err);
     }
 }
 
-async function updateLatestDailyData() {
+async function updateLatestDailyData(): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
     console.log(`[${ts}] Worker (Diário): Buscando fechamento de ontem...`);
     try {
@@ -349,8 +498,8 @@ async function updateLatestDailyData() {
             fetchWithRetry('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=brl&days=2&interval=daily', { headers: COINGECKO_HEADERS() }),
         ]);
 
-        const usdPrices = usdRes.data.prices;
-        const brlPrices = brlRes.data.prices;
+        const usdPrices: [number, number][] = usdRes.data.prices;
+        const brlPrices: [number, number][] = brlRes.data.prices;
         if (usdPrices?.length > 1 && brlPrices?.length > 1) {
             const yesterday = usdPrices[usdPrices.length - 2];
             const date = new Date(yesterday[0]).toISOString().split('T')[0];
@@ -363,7 +512,7 @@ async function updateLatestDailyData() {
                 console.log(`[${ts}] Worker (Diário): Preço para ${date} já atualizado.`);
             }
         }
-    } catch (err) {
+    } catch (err: any) {
         console.error(`[${ts}] Worker (Diário): ERRO ao buscar fechamento diário:`, err.message);
         if (Sentry) Sentry.captureException(err);
     }
@@ -371,10 +520,10 @@ async function updateLatestDailyData() {
 
 // --- ALERTAS DE PREÇO VIA PUSH ---
 
-async function checkAndSendAlerts(prices) {
+async function checkAndSendAlerts(prices: { btc_usd: number; btc_brl: number }): Promise<void> {
     if (!webpush) return;
     try {
-        const alerts = await db.all(`
+        const alerts: PriceAlertRow[] = await db.all(`
             SELECT a.id, a.currency, a.direction, a.threshold, s.endpoint, s.p256dh, s.auth
             FROM price_alerts a
             JOIN push_subscriptions s ON a.subscription_id = s.id
@@ -408,7 +557,7 @@ async function checkAndSendAlerts(prices) {
                 );
                 await db.run('UPDATE price_alerts SET active = 0, triggered_at = ? WHERE id = ?', [Date.now(), alert.id]);
                 console.log(`Alerta ${alert.id} disparado (${alert.currency} ${alert.direction} ${alert.threshold}).`);
-            } catch (err) {
+            } catch (err: any) {
                 if (err.statusCode === 410) {
                     await db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [alert.endpoint]);
                     console.log(`Subscription expirada removida: ${alert.endpoint}`);
@@ -417,15 +566,107 @@ async function checkAndSendAlerts(prices) {
                 }
             }
         }
-    } catch (err) {
+    } catch (err: any) {
         console.error("Erro ao verificar alertas de preço:", err.message);
         if (Sentry) Sentry.captureException(err);
     }
 }
 
+// --- PAYLOAD DE DADOS E WEBSOCKET (F19 + F20) ---
+
+async function buildDataPayload(): Promise<ApiDataPayload> {
+    const mempool: MempoolRow | undefined = await db.get('SELECT * FROM mempool_snapshot WHERE id = 1');
+    if (!mempool) await initialDataLoadPromise;
+
+    const [prices, fearGreed, globalMetrics, dailyPrices, freshMempool, networkMetrics, dominance, lightning] = await Promise.all([
+        db.all('SELECT * FROM current_prices') as Promise<PriceRow[]>,
+        db.get('SELECT * FROM fear_greed_history ORDER BY date DESC LIMIT 1') as Promise<FearGreedRow | undefined>,
+        db.get('SELECT * FROM btc_global_metrics_history ORDER BY timestamp DESC LIMIT 1') as Promise<GlobalMetricsRow | undefined>,
+        db.all('SELECT price_usd FROM btc_daily_close_prices ORDER BY date DESC LIMIT 200') as Promise<DailyPriceRow[]>,
+        db.get('SELECT * FROM mempool_snapshot WHERE id = 1') as Promise<MempoolRow | undefined>,
+        (db.get('SELECT * FROM network_metrics_snapshot WHERE id = 1') as Promise<NetworkMetricsRow | undefined>).catch(() => undefined),
+        (db.get('SELECT * FROM btc_dominance_snapshot WHERE id = 1') as Promise<DominanceRow | undefined>).catch(() => undefined),
+        (db.get('SELECT * FROM lightning_snapshot WHERE id = 1') as Promise<LightningRow | undefined>).catch(() => undefined),
+    ]);
+
+    const priceMap: Record<string, number> = Object.fromEntries((prices || []).map((p: PriceRow) => [p.symbol, p.price]));
+    const currentBtcUsd = priceMap['BTC-USD'];
+
+    let mayer_multiple: number | null = null;
+    if (currentBtcUsd && dailyPrices?.length >= 200) {
+        const sma200 = dailyPrices.reduce((s: number, r: DailyPriceRow) => s + r.price_usd, 0) / 200;
+        mayer_multiple = currentBtcUsd / sma200;
+    }
+
+    const supply = freshMempool?.calculated_supply;
+    const blockHeight = freshMempool?.block_height;
+    const s2f_ratio = (supply && blockHeight != null) ? calculateStockToFlow(supply, blockHeight) : null;
+
+    const lastUpdateTimestamp = freshMempool?.last_updated || Date.now();
+    const timeUntilNextUpdate = (lastUpdateTimestamp + UPDATE_INTERVAL_MS) - Date.now();
+
+    return {
+        lastUpdateTimestamp,
+        timeUntilNextUpdate,
+        prices: {
+            btc_usd: priceMap['BTC-USD'],
+            btc_brl: priceMap['BTC-BRL'],
+            btc_eur: priceMap['BTC-EUR'],
+            usdt_brl: priceMap['USDT-BRL'],
+        },
+        mempool: {
+            fastest_fee: freshMempool?.fastest_fee,
+            half_hour_fee: freshMempool?.half_hour_fee,
+            hour_fee: freshMempool?.hour_fee,
+            block_height: freshMempool?.block_height,
+            tx_count: freshMempool?.tx_count,
+            calculated_supply: freshMempool?.calculated_supply,
+        },
+        fearGreed: {
+            value: fearGreed?.value,
+            classification: fearGreed?.classification,
+            last_updated: fearGreed?.last_updated,
+        },
+        globalMetrics: {
+            market_cap_usd: globalMetrics?.market_cap_usd,
+            mayer_multiple,
+            btc_dominance_pct: dominance?.dominance_pct ?? null,
+            s2f_ratio,
+        },
+        network: {
+            hash_rate_eh_s: networkMetrics?.hash_rate_eh_s ?? null,
+            difficulty: networkMetrics?.difficulty ?? null,
+            difficulty_change_pct: networkMetrics?.difficulty_change_pct ?? null,
+            avg_block_time_seconds: networkMetrics?.avg_block_time_seconds ?? null,
+            last_updated: networkMetrics?.last_updated ?? null,
+        },
+        lightning: {
+            capacity_btc: lightning?.capacity_btc ?? null,
+            channels: lightning?.channels ?? null,
+            nodes: lightning?.nodes ?? null,
+            last_updated: lightning?.last_updated ?? null,
+        },
+    };
+}
+
+async function broadcastUpdate(): Promise<void> {
+    if (!wss || wsClients.size === 0) return;
+    try {
+        const payload = await buildDataPayload();
+        const message = JSON.stringify({ type: 'update', data: payload });
+        for (const client of wsClients) {
+            if (client.readyState === 1) { // WebSocket.OPEN = 1
+                client.send(message);
+            }
+        }
+    } catch (err: any) {
+        console.error("Erro ao fazer broadcast WebSocket:", err.message);
+    }
+}
+
 // --- AGENDADORES ---
 
-function scheduleHighFrequencyWorker() {
+function scheduleHighFrequencyWorker(): void {
     console.log(`Agendando worker de alta frequência a cada ${cronIntervalMinutes} minutos.`);
     cron.schedule(CRON_SCHEDULE_HIGH_FREQUENCY, () => {
         updateHighFrequencyData();
@@ -434,19 +675,20 @@ function scheduleHighFrequencyWorker() {
     });
 }
 
-function scheduleDailyWorker() {
+function scheduleDailyWorker(): void {
     cron.schedule('15 0 * * *', () => {
         const ts = new Date().toLocaleString('pt-BR');
         console.log(`[${ts}] SCHEDULE: Disparando workers diários...`);
         updateFearGreedData();
         updateLatestDailyData();
+        updateLightningData();
     });
 }
 
 // --- SERVIDOR EXPRESS ---
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT: number = parseInt(process.env.PORT || '3000') || 3000;
 
 // Sentry request handler (deve ser o primeiro middleware)
 if (Sentry) app.use(Sentry.Handlers.requestHandler());
@@ -465,7 +707,7 @@ app.use(helmet({
             ],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", "data:", "https:"],
-            connectSrc: ["'self'", "https://www.google-analytics.com", "https://region1.google-analytics.com"],
+            connectSrc: ["'self'", "https://www.google-analytics.com", "https://region1.google-analytics.com", "wss:", "ws:"],
             fontSrc: ["'self'"],
             frameSrc: ["'none'"],
         },
@@ -498,7 +740,7 @@ app.set('views', path.join(__dirname, 'views'));
 
 // --- ENDPOINTS DE API ---
 
-app.get('/api/health', async (req, res) => {
+app.get('/api/health', async (req: Request, res: Response) => {
     try {
         await db.get('SELECT 1');
         res.json({ status: 'ok', timestamp: Date.now(), uptime: process.uptime() });
@@ -507,88 +749,22 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
-app.get('/api/data', async (req, res) => {
+app.get('/api/data', async (req: Request, res: Response) => {
     const ts = new Date().toLocaleString('pt-BR');
     console.log(`[${ts}] API /api/data: requisição recebida.`);
     try {
-        const mempool = await db.get('SELECT * FROM mempool_snapshot WHERE id = 1');
-        if (!mempool) {
-            console.log(`[${ts}] API: Cache vazio. Aguardando carga inicial...`);
-            await initialDataLoadPromise;
-        }
-
-        const [prices, fearGreed, globalMetrics, dailyPrices, freshMempool, networkMetrics, dominance] = await Promise.all([
-            db.all('SELECT * FROM current_prices'),
-            db.get('SELECT * FROM fear_greed_history ORDER BY date DESC LIMIT 1'),
-            db.get('SELECT * FROM btc_global_metrics_history ORDER BY timestamp DESC LIMIT 1'),
-            db.all('SELECT price_usd FROM btc_daily_close_prices ORDER BY date DESC LIMIT 200'),
-            db.get('SELECT * FROM mempool_snapshot WHERE id = 1'),
-            db.get('SELECT * FROM network_metrics_snapshot WHERE id = 1').catch(() => null),
-            db.get('SELECT * FROM btc_dominance_snapshot WHERE id = 1').catch(() => null),
-        ]);
-
-        const priceMap = Object.fromEntries((prices || []).map(p => [p.symbol, p.price]));
-        const currentBtcUsd = priceMap['BTC-USD'];
-
-        let mayer_multiple = null;
-        if (currentBtcUsd && dailyPrices?.length >= 200) {
-            const sma200 = dailyPrices.reduce((s, r) => s + r.price_usd, 0) / 200;
-            mayer_multiple = currentBtcUsd / sma200;
-        }
-
-        const supply = freshMempool?.calculated_supply;
-        const blockHeight = freshMempool?.block_height;
-        const s2f_ratio = (supply && blockHeight != null) ? calculateStockToFlow(supply, blockHeight) : null;
-
-        const lastUpdateTimestamp = freshMempool?.last_updated || Date.now();
-        const timeUntilNextUpdate = (lastUpdateTimestamp + UPDATE_INTERVAL_MS) - Date.now();
-
-        res.json({
-            lastUpdateTimestamp,
-            timeUntilNextUpdate,
-            prices: {
-                btc_usd: priceMap['BTC-USD'],
-                btc_brl: priceMap['BTC-BRL'],
-                btc_eur: priceMap['BTC-EUR'],
-                usdt_brl: priceMap['USDT-BRL'],
-            },
-            mempool: {
-                fastest_fee: freshMempool?.fastest_fee,
-                half_hour_fee: freshMempool?.half_hour_fee,
-                hour_fee: freshMempool?.hour_fee,
-                block_height: freshMempool?.block_height,
-                tx_count: freshMempool?.tx_count,
-                calculated_supply: freshMempool?.calculated_supply,
-            },
-            fearGreed: {
-                value: fearGreed?.value,
-                classification: fearGreed?.classification,
-                last_updated: fearGreed?.last_updated,
-            },
-            globalMetrics: {
-                market_cap_usd: globalMetrics?.market_cap_usd,
-                mayer_multiple,
-                btc_dominance_pct: dominance?.dominance_pct ?? null,
-                s2f_ratio,
-            },
-            network: {
-                hash_rate_eh_s: networkMetrics?.hash_rate_eh_s ?? null,
-                difficulty: networkMetrics?.difficulty ?? null,
-                difficulty_change_pct: networkMetrics?.difficulty_change_pct ?? null,
-                avg_block_time_seconds: networkMetrics?.avg_block_time_seconds ?? null,
-                last_updated: networkMetrics?.last_updated ?? null,
-            },
-        });
-    } catch (err) {
+        const payload = await buildDataPayload();
+        res.json(payload);
+    } catch (err: any) {
         console.error("Erro no endpoint /api/data:", err);
         if (Sentry) Sentry.captureException(err);
         res.status(500).json({ error: "Falha ao processar a requisição." });
     }
 });
 
-app.get('/api/historical-prices', async (req, res) => {
+app.get('/api/historical-prices', async (req: Request, res: Response) => {
     const ts = new Date().toLocaleString('pt-BR');
-    const days = Math.min(365, Math.max(1, parseInt(req.query.days) || 365));
+    const days = Math.min(365, Math.max(1, parseInt(req.query.days as string) || 365));
     console.log(`[${ts}] API /api/historical-prices: ${days} dias.`);
     try {
         const startDate = new Date();
@@ -599,20 +775,20 @@ app.get('/api/historical-prices', async (req, res) => {
             [startDateStr]
         );
         res.json(data);
-    } catch (err) {
+    } catch (err: any) {
         console.error("Erro ao buscar histórico:", err);
         if (Sentry) Sentry.captureException(err);
         res.status(500).json({ error: "Falha ao buscar dados históricos." });
     }
 });
 
-app.get('/api/fear-greed-history', async (req, res) => {
+app.get('/api/fear-greed-history', async (req: Request, res: Response) => {
     try {
         const data = await db.all(
             'SELECT date, value, classification FROM fear_greed_history ORDER BY date DESC LIMIT 90'
         );
         res.json(data.reverse());
-    } catch (err) {
+    } catch (err: any) {
         console.error("Erro ao buscar histórico Fear & Greed:", err);
         if (Sentry) Sentry.captureException(err);
         res.status(500).json({ error: "Falha ao buscar histórico do Fear & Greed." });
@@ -621,14 +797,14 @@ app.get('/api/fear-greed-history', async (req, res) => {
 
 // --- ENDPOINTS DE PUSH NOTIFICATIONS E ALERTAS ---
 
-app.get('/api/push/vapid-public-key', (req, res) => {
+app.get('/api/push/vapid-public-key', (req: Request, res: Response) => {
     if (!process.env.VAPID_PUBLIC_KEY) {
         return res.status(503).json({ error: 'Push notifications não configuradas no servidor.' });
     }
     res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
 
-app.post('/api/push/subscribe', async (req, res) => {
+app.post('/api/push/subscribe', async (req: Request, res: Response) => {
     const { endpoint, keys } = req.body || {};
     if (!endpoint || !keys?.p256dh || !keys?.auth) {
         return res.status(400).json({ error: 'Subscription inválida: endpoint e keys (p256dh, auth) são obrigatórios.' });
@@ -640,20 +816,20 @@ app.post('/api/push/subscribe', async (req, res) => {
         );
         const sub = await db.get('SELECT id FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
         res.json({ subscriptionId: sub.id });
-    } catch (err) {
+    } catch (err: any) {
         console.error("Erro ao salvar subscription:", err.message);
         res.status(500).json({ error: 'Erro ao salvar subscription.' });
     }
 });
 
-app.delete('/api/push/subscribe', async (req, res) => {
+app.delete('/api/push/subscribe', async (req: Request, res: Response) => {
     const { endpoint } = req.body || {};
     if (!endpoint) return res.status(400).json({ error: 'endpoint é obrigatório.' });
     await db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
     res.json({ ok: true });
 });
 
-app.post('/api/alerts', async (req, res) => {
+app.post('/api/alerts', async (req: Request, res: Response) => {
     const { endpoint, currency, direction, threshold } = req.body || {};
     if (!endpoint || !currency || !direction || threshold == null) {
         return res.status(400).json({ error: 'Campos obrigatórios: endpoint, currency, direction, threshold.' });
@@ -676,13 +852,13 @@ app.post('/api/alerts', async (req, res) => {
             [sub.id, currency, direction, thresh, Date.now()]
         );
         res.json({ id: result.lastID });
-    } catch (err) {
+    } catch (err: any) {
         console.error("Erro ao criar alerta:", err.message);
         res.status(500).json({ error: 'Erro ao criar alerta.' });
     }
 });
 
-app.get('/api/alerts', async (req, res) => {
+app.get('/api/alerts', async (req: Request, res: Response) => {
     const { endpoint } = req.query;
     if (!endpoint) return res.status(400).json({ error: 'Parâmetro endpoint obrigatório.' });
     try {
@@ -693,12 +869,12 @@ app.get('/api/alerts', async (req, res) => {
             [sub.id]
         );
         res.json(alerts);
-    } catch (err) {
+    } catch (err: any) {
         res.status(500).json({ error: 'Erro ao listar alertas.' });
     }
 });
 
-app.delete('/api/alerts/:id', async (req, res) => {
+app.delete('/api/alerts/:id', async (req: Request, res: Response) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido.' });
     await db.run('DELETE FROM price_alerts WHERE id = ?', [id]);
@@ -707,7 +883,7 @@ app.delete('/api/alerts/:id', async (req, res) => {
 
 // --- ROTAS DE PÁGINAS ---
 
-app.get('/', (req, res) => {
+app.get('/', (req: Request, res: Response) => {
     res.render('pages/index', {
         page: 'dashboard',
         title: 'BitPanel | Preço Bitcoin, Indicadores e Cotação em Tempo Real',
@@ -715,7 +891,7 @@ app.get('/', (req, res) => {
     });
 });
 
-app.get('/dca', (req, res) => {
+app.get('/dca', (req: Request, res: Response) => {
     res.render('pages/dca', {
         page: 'dca',
         title: 'Calculadora DCA de Bitcoin | Simule Dollar Cost Averaging',
@@ -723,7 +899,7 @@ app.get('/dca', (req, res) => {
     });
 });
 
-app.get('/tv', (req, res) => {
+app.get('/tv', (req: Request, res: Response) => {
     res.render('pages/tv', {
         page: 'tv',
         title: 'BitPanel TV | Bitcoin em Tela Cheia',
@@ -737,7 +913,7 @@ app.get('/tv', (req, res) => {
 if (Sentry) app.use(Sentry.Handlers.errorHandler());
 
 // 404
-app.use((req, res) => {
+app.use((req: Request, res: Response) => {
     res.status(404).render('pages/404', {
         page: 'error',
         title: 'Página não encontrada | BitPanel',
@@ -746,7 +922,7 @@ app.use((req, res) => {
 });
 
 // 500
-app.use((err, req, res, next) => {
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
     console.error("Erro interno:", err);
     res.status(500).render('pages/500', {
         page: 'error',
@@ -757,10 +933,17 @@ app.use((err, req, res, next) => {
 
 // --- INICIALIZAÇÃO ---
 
-async function startServer() {
+async function startServer(): Promise<void> {
     validateEnv();
     await initializeDatabase();
-    app.listen(PORT, () => {
+    const server = http.createServer(app);
+    wss = new WebSocketServer({ server });
+    wss.on('connection', (ws: any) => {
+        wsClients.add(ws);
+        ws.on('close', () => wsClients.delete(ws));
+        ws.on('error', () => wsClients.delete(ws));
+    });
+    server.listen(PORT, () => {
         console.log(`Servidor rodando em http://localhost:${PORT}`);
         scheduleHighFrequencyWorker();
         scheduleDailyWorker();
@@ -770,6 +953,7 @@ async function startServer() {
             updateHighFrequencyData(),
             updateNetworkMetrics(),
             updateDominanceData(),
+            updateLightningData(),
             syncHistoricDataOnStartup(),
         ]);
     });

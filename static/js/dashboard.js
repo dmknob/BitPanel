@@ -41,6 +41,7 @@ let updateScheduler = null;
 let priceChart = null;
 let fearGreedChart = null;
 let currentChartDays = 30;
+let wsPollingInterval = null;
 
 // Configurações do Agendador
 const JITTER_MS = 10000; // Variação aleatória de até 10 segundos
@@ -133,6 +134,22 @@ function renderData(data) {
     if (btcAvgBlockTimeElement && data.network?.avg_block_time_seconds != null) {
         const minutes = (data.network.avg_block_time_seconds / 60).toFixed(1);
         btcAvgBlockTimeElement.textContent = `${minutes} min`;
+    }
+
+    // Lightning Network
+    if (data.lightning) {
+        const lightningCapacityEl = document.getElementById('lightning-capacity');
+        const lightningChannelsEl = document.getElementById('lightning-channels');
+        const lightningNodesEl = document.getElementById('lightning-nodes');
+        if (lightningCapacityEl && data.lightning.capacity_btc != null) {
+            lightningCapacityEl.textContent = `${data.lightning.capacity_btc.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} BTC`;
+        }
+        if (lightningChannelsEl && data.lightning.channels != null) {
+            lightningChannelsEl.textContent = data.lightning.channels.toLocaleString('pt-BR');
+        }
+        if (lightningNodesEl && data.lightning.nodes != null) {
+            lightningNodesEl.textContent = data.lightning.nodes.toLocaleString('pt-BR');
+        }
     }
 
     if (satsInputElement && satsInputElement.value) calculateSatsConversion();
@@ -521,6 +538,58 @@ function urlBase64ToUint8Array(base64String) {
     return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
+// --- WEBSOCKET ---
+function startWsPollingFallback() {
+    if (wsPollingInterval) return;
+    console.log("WebSocket indisponível. Usando polling a cada 10 minutos.");
+    wsPollingInterval = setInterval(async () => {
+        try {
+            const res = await fetch('/api/data');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            localStorage.setItem('cachedData', JSON.stringify(data));
+            renderData(data);
+        } catch (e) {
+            console.error('Polling fallback: erro ao buscar dados:', e.message);
+        }
+    }, 600_000);
+}
+
+function initWebSocket() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}`);
+
+    ws.addEventListener('open', () => {
+        console.log("WebSocket conectado. Polling desativado.");
+        if (wsPollingInterval) {
+            clearInterval(wsPollingInterval);
+            wsPollingInterval = null;
+        }
+    });
+
+    ws.addEventListener('message', event => {
+        try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'update' && msg.data) {
+                localStorage.setItem('cachedData', JSON.stringify(msg.data));
+                renderData(msg.data);
+            }
+        } catch (e) {
+            console.error('WebSocket: erro ao processar mensagem:', e.message);
+        }
+    });
+
+    ws.addEventListener('close', () => {
+        console.warn("WebSocket fechado. Ativando polling de fallback.");
+        startWsPollingFallback();
+    });
+
+    ws.addEventListener('error', () => {
+        console.error("WebSocket com erro. Ativando polling de fallback.");
+        startWsPollingFallback();
+    });
+}
+
 // --- INICIALIZAÇÃO DA PÁGINA ---
 document.addEventListener('DOMContentLoaded', () => {
     try {
@@ -533,6 +602,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.error("Não foi possível ler os dados do cache:", e);
     }
     fetchAllData();
+    initWebSocket();
 
     // Portfólio
     loadPortfolioInputs();

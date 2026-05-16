@@ -1,6 +1,7 @@
 'use strict';
 
 let tvScheduler = null;
+let tvWsPollingInterval = null;
 
 function updateClock() {
     const el = document.getElementById('tv-clock');
@@ -62,12 +63,22 @@ function renderTv(data) {
     const s2f = data.globalMetrics?.s2f_ratio;
     if (s2f != null) set('tv-s2f', `S2F: ${s2f.toFixed(1)}`);
 
+    if (data.lightning) {
+        if (data.lightning.capacity_btc != null) {
+            set('tv-ln-capacity', `${data.lightning.capacity_btc.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} BTC`);
+        }
+        if (data.lightning.channels != null) {
+            set('tv-ln-channels', data.lightning.channels.toLocaleString('pt-BR'));
+        }
+        if (data.lightning.nodes != null) {
+            set('tv-ln-nodes', data.lightning.nodes.toLocaleString('pt-BR'));
+        }
+    }
+
     if (data.lastUpdateTimestamp) {
         const t = new Date(data.lastUpdateTimestamp);
         set('tv-last-update', `Última atualização: ${t.toLocaleString('pt-BR')}`);
     }
-
-    scheduleNextTvUpdate(data.timeUntilNextUpdate);
 }
 
 async function fetchTvData() {
@@ -76,6 +87,7 @@ async function fetchTvData() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         renderTv(data);
+        scheduleNextTvUpdate(data.timeUntilNextUpdate);
     } catch (e) {
         console.error('TV: Erro ao buscar dados:', e.message);
         if (tvScheduler) clearTimeout(tvScheduler);
@@ -89,4 +101,59 @@ function scheduleNextTvUpdate(ms) {
     tvScheduler = setTimeout(fetchTvData, delay);
 }
 
+function startTvWsPollingFallback() {
+    if (tvWsPollingInterval) return;
+    console.log('TV: WebSocket indisponível. Usando polling a cada 10 minutos.');
+    tvWsPollingInterval = setInterval(async () => {
+        try {
+            const res = await fetch('/api/data');
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            renderTv(data);
+        } catch (e) {
+            console.error('TV polling fallback: erro ao buscar dados:', e.message);
+        }
+    }, 600_000);
+}
+
+function initTvWebSocket() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}`);
+
+    ws.addEventListener('open', () => {
+        console.log('TV: WebSocket conectado. Polling desativado.');
+        if (tvWsPollingInterval) {
+            clearInterval(tvWsPollingInterval);
+            tvWsPollingInterval = null;
+        }
+        // Cancel any scheduled fetch-based polling when WS is active
+        if (tvScheduler) {
+            clearTimeout(tvScheduler);
+            tvScheduler = null;
+        }
+    });
+
+    ws.addEventListener('message', event => {
+        try {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'update' && msg.data) {
+                renderTv(msg.data);
+            }
+        } catch (e) {
+            console.error('TV WebSocket: erro ao processar mensagem:', e.message);
+        }
+    });
+
+    ws.addEventListener('close', () => {
+        console.warn('TV: WebSocket fechado. Ativando polling de fallback.');
+        startTvWsPollingFallback();
+    });
+
+    ws.addEventListener('error', () => {
+        console.error('TV: WebSocket com erro. Ativando polling de fallback.');
+        startTvWsPollingFallback();
+    });
+}
+
 fetchTvData();
+initTvWebSocket();

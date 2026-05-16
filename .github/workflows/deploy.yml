@@ -31,8 +31,10 @@ jobs:
               ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
               "cd ${{ secrets.APP_DIR || '/opt/bitpanel' }} && \
                git pull origin main && \
+               npm ci && \
+               npm run build && \
                npm ci --omit=dev && \
-               pm2 restart bitpanel || pm2 start ecosystem.config.js && \
+               pm2 restart bitpanel || pm2 start dist/server.js --name bitpanel && \
                pm2 save"
 
       - name: Health check
