@@ -1,3 +1,10 @@
+// =============================================================================
+// BitPanel — server.ts
+// Banco de dados: better-sqlite3 (síncrono, sem wrapper `sqlite`).
+// NÃO utilizar os pacotes `sqlite3` nem `sqlite` — incompatíveis com o
+// ambiente de produção por exigirem GLIBC_2.38+ (ver ADR: db-driver.md).
+// =============================================================================
+
 // 1. Imports
 const http = require('http');
 const express = require('express');
@@ -5,8 +12,8 @@ const { WebSocketServer } = require('ws');
 const axios = require('axios');
 const cors = require('cors');
 const cron = require('node-cron');
-const sqlite3 = require('sqlite3');
-const { open } = require('sqlite');
+// Driver SQLite: better-sqlite3 (API síncrona, sem wrapper `sqlite`)
+const Database = require('better-sqlite3');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -178,13 +185,17 @@ async function fetchWithRetry(url: string, options: object = {}, retries: number
 }
 
 // --- BANCO DE DADOS + MIGRATIONS ---
-async function initializeDatabase(): Promise<void> {
+// Utiliza better-sqlite3 (API 100% síncrona).
+// Referência: https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md
+
+function initializeDatabase(): void {
     try {
-        db = await open({
-            filename: path.join(__dirname, process.env.DB_NAME || 'bitpanel.sqlite'),
-            driver: sqlite3.Database
-        });
-        await runMigrations(db);
+        const dbPath = path.join(__dirname, process.env.DB_NAME || 'bitpanel.sqlite');
+        // WAL mode melhora concorrência de leitura sem overhead de locks
+        db = new Database(dbPath, { verbose: process.env.NODE_ENV === 'development' ? console.log : undefined });
+        db.pragma('journal_mode = WAL');
+        db.pragma('foreign_keys = ON');
+        runMigrations(db);
         console.log("Banco de dados SQLite conectado e atualizado.");
     } catch (error) {
         console.error("Erro ao inicializar o banco de dados SQLite:", error);
@@ -192,11 +203,12 @@ async function initializeDatabase(): Promise<void> {
     }
 }
 
-async function runMigrations(db: any): Promise<void> {
-    const { user_version: version } = await db.get('PRAGMA user_version');
+function runMigrations(db: any): void {
+    // better-sqlite3: db.pragma retorna o valor direto com { simple: true }
+    const version: number = db.pragma('user_version', { simple: true });
 
     if (version < 1) {
-        await db.exec(`
+        db.exec(`
             CREATE TABLE IF NOT EXISTS current_prices (
                 symbol TEXT PRIMARY KEY,
                 price REAL NOT NULL,
@@ -229,12 +241,12 @@ async function runMigrations(db: any): Promise<void> {
                 last_updated INTEGER NOT NULL
             );
         `);
-        await db.run('PRAGMA user_version = 1');
+        db.pragma('user_version = 1');
         console.log("Migration 1: Schema inicial criado.");
     }
 
     if (version < 2) {
-        await db.exec(`
+        db.exec(`
             CREATE TABLE IF NOT EXISTS network_metrics_snapshot (
                 id INTEGER PRIMARY KEY DEFAULT 1,
                 hash_rate_eh_s REAL,
@@ -249,12 +261,12 @@ async function runMigrations(db: any): Promise<void> {
                 last_updated INTEGER NOT NULL
             );
         `);
-        await db.run('PRAGMA user_version = 2');
+        db.pragma('user_version = 2');
         console.log("Migration 2: Tabelas de rede e dominância criadas.");
     }
 
     if (version < 3) {
-        await db.exec(`
+        db.exec(`
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 endpoint TEXT UNIQUE NOT NULL,
@@ -274,12 +286,12 @@ async function runMigrations(db: any): Promise<void> {
                 FOREIGN KEY (subscription_id) REFERENCES push_subscriptions(id) ON DELETE CASCADE
             );
         `);
-        await db.run('PRAGMA user_version = 3');
+        db.pragma('user_version = 3');
         console.log("Migration 3: Tabelas de push notifications e alertas criadas.");
     }
 
     if (version < 4) {
-        await db.exec(`
+        db.exec(`
             CREATE TABLE IF NOT EXISTS lightning_snapshot (
                 id INTEGER PRIMARY KEY DEFAULT 1,
                 capacity_btc REAL,
@@ -288,7 +300,7 @@ async function runMigrations(db: any): Promise<void> {
                 last_updated INTEGER NOT NULL
             );
         `);
-        await db.run('PRAGMA user_version = 4');
+        db.pragma('user_version = 4');
         console.log("Migration 4: Tabela de Lightning Network criada.");
     }
 }
@@ -343,23 +355,25 @@ async function updateHighFrequencyData(): Promise<void> {
             throw new Error(`Resposta CoinGecko incompleta: ${JSON.stringify(p)}`);
         }
 
-        await db.run('INSERT OR REPLACE INTO current_prices (symbol, price, last_updated) VALUES (?,?,?)', ['BTC-USD', btcUsd, now]);
-        await db.run('INSERT OR REPLACE INTO current_prices (symbol, price, last_updated) VALUES (?,?,?)', ['BTC-BRL', btcBrl, now]);
-        await db.run('INSERT OR REPLACE INTO current_prices (symbol, price, last_updated) VALUES (?,?,?)', ['BTC-EUR', btcEur, now]);
-        await db.run('INSERT OR REPLACE INTO current_prices (symbol, price, last_updated) VALUES (?,?,?)', ['USDT-BRL', usdtBrl, now]);
+        const upsertPrice = db.prepare('INSERT OR REPLACE INTO current_prices (symbol, price, last_updated) VALUES (?,?,?)');
+        upsertPrice.run('BTC-USD', btcUsd, now);
+        upsertPrice.run('BTC-BRL', btcBrl, now);
+        upsertPrice.run('BTC-EUR', btcEur, now);
+        upsertPrice.run('USDT-BRL', usdtBrl, now);
 
         const blockHeight: number = heightRes.data;
         const supply: number = calculateBitcoinSupply(blockHeight);
         const marketCap: number = btcUsd * supply;
 
-        await db.run(
-            `INSERT OR REPLACE INTO mempool_snapshot (id, fastest_fee, half_hour_fee, hour_fee, block_height, tx_count, calculated_supply, last_updated) VALUES (1,?,?,?,?,?,?,?)`,
-            [feesRes.data.fastestFee, feesRes.data.halfHourFee, feesRes.data.hourFee, blockHeight, mempoolRes.data.count, supply, now]
-        );
-        await db.run('INSERT INTO btc_global_metrics_history (timestamp, market_cap_usd) VALUES (?,?)', [now, marketCap]);
+        db.prepare(
+            `INSERT OR REPLACE INTO mempool_snapshot (id, fastest_fee, half_hour_fee, hour_fee, block_height, tx_count, calculated_supply, last_updated) VALUES (1,?,?,?,?,?,?,?)`
+        ).run(feesRes.data.fastestFee, feesRes.data.halfHourFee, feesRes.data.hourFee, blockHeight, mempoolRes.data.count, supply, now);
+
+        db.prepare('INSERT INTO btc_global_metrics_history (timestamp, market_cap_usd) VALUES (?,?)').run(now, marketCap);
+
         await checkAndSendAlerts({ btc_usd: btcUsd, btc_brl: btcBrl });
         console.log(`[${ts}] Worker: Dados de alta frequência salvos com sucesso.`);
-        broadcastUpdate().catch(() => {});
+        broadcastUpdate().catch(() => { });
     } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar dados de alta frequência:`, err.message);
         if (Sentry) Sentry.captureException(err);
@@ -378,10 +392,10 @@ async function updateNetworkMetrics(): Promise<void> {
         const hashRateEHs: number = (difficulty * Math.pow(2, 32)) / (timeAvgSeconds * 1e18);
         const difficultyChangePct: number | null = d.difficultyChange ?? null;
 
-        await db.run(
-            `INSERT OR REPLACE INTO network_metrics_snapshot (id, hash_rate_eh_s, difficulty, difficulty_change_pct, avg_block_time_seconds, last_updated) VALUES (1,?,?,?,?,?)`,
-            [hashRateEHs, difficulty, difficultyChangePct, timeAvgSeconds, Date.now()]
-        );
+        db.prepare(
+            `INSERT OR REPLACE INTO network_metrics_snapshot (id, hash_rate_eh_s, difficulty, difficulty_change_pct, avg_block_time_seconds, last_updated) VALUES (1,?,?,?,?,?)`
+        ).run(hashRateEHs, difficulty, difficultyChangePct, timeAvgSeconds, Date.now());
+
         console.log(`[${ts}] Worker: Métricas de rede salvas. Hash rate: ${hashRateEHs.toFixed(2)} EH/s`);
     } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar métricas de rede:`, err.message);
@@ -397,10 +411,10 @@ async function updateDominanceData(): Promise<void> {
         const dominancePct: number = res.data?.data?.market_cap_percentage?.btc;
         if (typeof dominancePct !== 'number') throw new Error('Dominância não retornada pela API');
 
-        await db.run(
-            `INSERT OR REPLACE INTO btc_dominance_snapshot (id, dominance_pct, last_updated) VALUES (1,?,?)`,
-            [dominancePct, Date.now()]
-        );
+        db.prepare(
+            `INSERT OR REPLACE INTO btc_dominance_snapshot (id, dominance_pct, last_updated) VALUES (1,?,?)`
+        ).run(dominancePct, Date.now());
+
         console.log(`[${ts}] Worker: Dominância BTC: ${dominancePct.toFixed(2)}%`);
     } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar dominância:`, err.message);
@@ -415,10 +429,9 @@ async function updateFearGreedData(): Promise<void> {
         const res = await fetchWithRetry('https://api.alternative.me/fng/?limit=1&format=json');
         const fng = res.data.data[0];
         const today = new Date().toISOString().split('T')[0];
-        await db.run(
-            'INSERT OR REPLACE INTO fear_greed_history (date, value, classification, last_updated) VALUES (?,?,?,?)',
-            [today, fng.value, fng.value_classification, Date.now()]
-        );
+        db.prepare(
+            'INSERT OR REPLACE INTO fear_greed_history (date, value, classification, last_updated) VALUES (?,?,?,?)'
+        ).run(today, fng.value, fng.value_classification, Date.now());
         console.log(`[${ts}] Worker: Fear & Greed Index salvo para ${today}.`);
     } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar Fear & Greed:`, err.message);
@@ -436,10 +449,10 @@ async function updateLightningData(): Promise<void> {
         const channels: number | null = d.latest?.channel_count ?? null;
         const nodes: number | null = d.latest?.node_count ?? null;
 
-        await db.run(
-            `INSERT OR REPLACE INTO lightning_snapshot (id, capacity_btc, channels, nodes, last_updated) VALUES (1,?,?,?,?)`,
-            [capacityBtc, channels, nodes, Date.now()]
-        );
+        db.prepare(
+            `INSERT OR REPLACE INTO lightning_snapshot (id, capacity_btc, channels, nodes, last_updated) VALUES (1,?,?,?,?)`
+        ).run(capacityBtc, channels, nodes, Date.now());
+
         console.log(`[${ts}] Worker: Lightning Network — ${capacityBtc?.toFixed(0)} BTC em ${channels?.toLocaleString()} canais.`);
     } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar dados da Lightning Network:`, err.message);
@@ -473,15 +486,19 @@ async function syncHistoricDataOnStartup(): Promise<void> {
             if (combined.has(date)) combined.get(date)!.price_brl = price;
         }
 
-        const stmt = await db.prepare('INSERT OR IGNORE INTO btc_daily_close_prices (date, price_usd, price_brl) VALUES (?,?,?)');
-        let inserted = 0;
-        for (const row of combined.values()) {
-            if (row.price_usd && row.price_brl) {
-                const r = await stmt.run(row.date, row.price_usd, row.price_brl);
-                if (r.changes > 0) inserted++;
+        // better-sqlite3: prepare uma vez, execute em transação para performance
+        const stmt = db.prepare('INSERT OR IGNORE INTO btc_daily_close_prices (date, price_usd, price_brl) VALUES (?,?,?)');
+        const insertMany = db.transaction((rows: { date: string; price_usd: number; price_brl: number }[]) => {
+            let inserted = 0;
+            for (const row of rows) {
+                const result = stmt.run(row.date, row.price_usd, row.price_brl);
+                if (result.changes > 0) inserted++;
             }
-        }
-        await stmt.finalize();
+            return inserted;
+        });
+
+        const validRows = [...combined.values()].filter(r => r.price_usd && r.price_brl) as { date: string; price_usd: number; price_brl: number }[];
+        const inserted = insertMany(validRows);
         console.log(`[${ts}] Worker (Inicialização): ${inserted} novos registros históricos adicionados.`);
     } catch (err: any) {
         console.error(`[${ts}] Worker (Inicialização): ERRO ao sincronizar histórico:`, err.message);
@@ -505,8 +522,8 @@ async function updateLatestDailyData(): Promise<void> {
             const date = new Date(yesterday[0]).toISOString().split('T')[0];
             const priceUsd = yesterday[1];
             const priceBrl = brlPrices[brlPrices.length - 2][1];
-            const r = await db.run('INSERT OR IGNORE INTO btc_daily_close_prices (date, price_usd, price_brl) VALUES (?,?,?)', [date, priceUsd, priceBrl]);
-            if (r.changes > 0) {
+            const result = db.prepare('INSERT OR IGNORE INTO btc_daily_close_prices (date, price_usd, price_brl) VALUES (?,?,?)').run(date, priceUsd, priceBrl);
+            if (result.changes > 0) {
                 console.log(`[${ts}] Worker (Diário): Novo fechamento adicionado para ${date}.`);
             } else {
                 console.log(`[${ts}] Worker (Diário): Preço para ${date} já atualizado.`);
@@ -523,12 +540,12 @@ async function updateLatestDailyData(): Promise<void> {
 async function checkAndSendAlerts(prices: { btc_usd: number; btc_brl: number }): Promise<void> {
     if (!webpush) return;
     try {
-        const alerts: PriceAlertRow[] = await db.all(`
+        const alerts: PriceAlertRow[] = db.prepare(`
             SELECT a.id, a.currency, a.direction, a.threshold, s.endpoint, s.p256dh, s.auth
             FROM price_alerts a
             JOIN push_subscriptions s ON a.subscription_id = s.id
             WHERE a.active = 1
-        `);
+        `).all();
 
         for (const alert of alerts) {
             const current = alert.currency === 'USD' ? prices.btc_usd : prices.btc_brl;
@@ -555,11 +572,11 @@ async function checkAndSendAlerts(prices: { btc_usd: number; btc_brl: number }):
                     { endpoint: alert.endpoint, keys: { p256dh: alert.p256dh, auth: alert.auth } },
                     payload
                 );
-                await db.run('UPDATE price_alerts SET active = 0, triggered_at = ? WHERE id = ?', [Date.now(), alert.id]);
+                db.prepare('UPDATE price_alerts SET active = 0, triggered_at = ? WHERE id = ?').run(Date.now(), alert.id);
                 console.log(`Alerta ${alert.id} disparado (${alert.currency} ${alert.direction} ${alert.threshold}).`);
             } catch (err: any) {
                 if (err.statusCode === 410) {
-                    await db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [alert.endpoint]);
+                    db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(alert.endpoint);
                     console.log(`Subscription expirada removida: ${alert.endpoint}`);
                 } else {
                     console.error(`Erro ao enviar push alerta ${alert.id}:`, err.message);
@@ -572,22 +589,24 @@ async function checkAndSendAlerts(prices: { btc_usd: number; btc_brl: number }):
     }
 }
 
-// --- PAYLOAD DE DADOS E WEBSOCKET (F19 + F20) ---
+// --- PAYLOAD DE DADOS E WEBSOCKET ---
 
 async function buildDataPayload(): Promise<ApiDataPayload> {
-    const mempool: MempoolRow | undefined = await db.get('SELECT * FROM mempool_snapshot WHERE id = 1');
+    const mempool: MempoolRow | undefined = db.prepare('SELECT * FROM mempool_snapshot WHERE id = 1').get();
     if (!mempool) await initialDataLoadPromise;
 
-    const [prices, fearGreed, globalMetrics, dailyPrices, freshMempool, networkMetrics, dominance, lightning] = await Promise.all([
-        db.all('SELECT * FROM current_prices') as Promise<PriceRow[]>,
-        db.get('SELECT * FROM fear_greed_history ORDER BY date DESC LIMIT 1') as Promise<FearGreedRow | undefined>,
-        db.get('SELECT * FROM btc_global_metrics_history ORDER BY timestamp DESC LIMIT 1') as Promise<GlobalMetricsRow | undefined>,
-        db.all('SELECT price_usd FROM btc_daily_close_prices ORDER BY date DESC LIMIT 200') as Promise<DailyPriceRow[]>,
-        db.get('SELECT * FROM mempool_snapshot WHERE id = 1') as Promise<MempoolRow | undefined>,
-        (db.get('SELECT * FROM network_metrics_snapshot WHERE id = 1') as Promise<NetworkMetricsRow | undefined>).catch(() => undefined),
-        (db.get('SELECT * FROM btc_dominance_snapshot WHERE id = 1') as Promise<DominanceRow | undefined>).catch(() => undefined),
-        (db.get('SELECT * FROM lightning_snapshot WHERE id = 1') as Promise<LightningRow | undefined>).catch(() => undefined),
-    ]);
+    const prices: PriceRow[] = db.prepare('SELECT * FROM current_prices').all();
+    const fearGreed: FearGreedRow | undefined = db.prepare('SELECT * FROM fear_greed_history ORDER BY date DESC LIMIT 1').get();
+    const globalMetrics: GlobalMetricsRow | undefined = db.prepare('SELECT * FROM btc_global_metrics_history ORDER BY timestamp DESC LIMIT 1').get();
+    const dailyPrices: DailyPriceRow[] = db.prepare('SELECT price_usd FROM btc_daily_close_prices ORDER BY date DESC LIMIT 200').all();
+    const freshMempool: MempoolRow | undefined = db.prepare('SELECT * FROM mempool_snapshot WHERE id = 1').get();
+
+    let networkMetrics: NetworkMetricsRow | undefined;
+    let dominance: DominanceRow | undefined;
+    let lightning: LightningRow | undefined;
+    try { networkMetrics = db.prepare('SELECT * FROM network_metrics_snapshot WHERE id = 1').get(); } catch { }
+    try { dominance = db.prepare('SELECT * FROM btc_dominance_snapshot WHERE id = 1').get(); } catch { }
+    try { lightning = db.prepare('SELECT * FROM lightning_snapshot WHERE id = 1').get(); } catch { }
 
     const priceMap: Record<string, number> = Object.fromEntries((prices || []).map((p: PriceRow) => [p.symbol, p.price]));
     const currentBtcUsd = priceMap['BTC-USD'];
@@ -740,9 +759,9 @@ app.set('views', path.join(__dirname, 'views'));
 
 // --- ENDPOINTS DE API ---
 
-app.get('/api/health', async (req: Request, res: Response) => {
+app.get('/api/health', (req: Request, res: Response) => {
     try {
-        await db.get('SELECT 1');
+        db.prepare('SELECT 1').get();
         res.json({ status: 'ok', timestamp: Date.now(), uptime: process.uptime() });
     } catch {
         res.status(503).json({ status: 'error', timestamp: Date.now() });
@@ -762,7 +781,7 @@ app.get('/api/data', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/historical-prices', async (req: Request, res: Response) => {
+app.get('/api/historical-prices', (req: Request, res: Response) => {
     const ts = new Date().toLocaleString('pt-BR');
     const days = Math.min(365, Math.max(1, parseInt(req.query.days as string) || 365));
     console.log(`[${ts}] API /api/historical-prices: ${days} dias.`);
@@ -770,10 +789,9 @@ app.get('/api/historical-prices', async (req: Request, res: Response) => {
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - days);
         const startDateStr = startDate.toISOString().split('T')[0];
-        const data = await db.all(
-            'SELECT date, price_usd, price_brl FROM btc_daily_close_prices WHERE date >= ? ORDER BY date ASC',
-            [startDateStr]
-        );
+        const data = db.prepare(
+            'SELECT date, price_usd, price_brl FROM btc_daily_close_prices WHERE date >= ? ORDER BY date ASC'
+        ).all(startDateStr);
         res.json(data);
     } catch (err: any) {
         console.error("Erro ao buscar histórico:", err);
@@ -782,11 +800,11 @@ app.get('/api/historical-prices', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/fear-greed-history', async (req: Request, res: Response) => {
+app.get('/api/fear-greed-history', (req: Request, res: Response) => {
     try {
-        const data = await db.all(
+        const data: any[] = db.prepare(
             'SELECT date, value, classification FROM fear_greed_history ORDER BY date DESC LIMIT 90'
-        );
+        ).all();
         res.json(data.reverse());
     } catch (err: any) {
         console.error("Erro ao buscar histórico Fear & Greed:", err);
@@ -804,17 +822,16 @@ app.get('/api/push/vapid-public-key', (req: Request, res: Response) => {
     res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
 
-app.post('/api/push/subscribe', async (req: Request, res: Response) => {
+app.post('/api/push/subscribe', (req: Request, res: Response) => {
     const { endpoint, keys } = req.body || {};
     if (!endpoint || !keys?.p256dh || !keys?.auth) {
         return res.status(400).json({ error: 'Subscription inválida: endpoint e keys (p256dh, auth) são obrigatórios.' });
     }
     try {
-        await db.run(
-            'INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?,?,?,?)',
-            [endpoint, keys.p256dh, keys.auth, Date.now()]
-        );
-        const sub = await db.get('SELECT id FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+        db.prepare(
+            'INSERT OR REPLACE INTO push_subscriptions (endpoint, p256dh, auth, created_at) VALUES (?,?,?,?)'
+        ).run(endpoint, keys.p256dh, keys.auth, Date.now());
+        const sub = db.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?').get(endpoint);
         res.json({ subscriptionId: sub.id });
     } catch (err: any) {
         console.error("Erro ao salvar subscription:", err.message);
@@ -822,14 +839,14 @@ app.post('/api/push/subscribe', async (req: Request, res: Response) => {
     }
 });
 
-app.delete('/api/push/subscribe', async (req: Request, res: Response) => {
+app.delete('/api/push/subscribe', (req: Request, res: Response) => {
     const { endpoint } = req.body || {};
     if (!endpoint) return res.status(400).json({ error: 'endpoint é obrigatório.' });
-    await db.run('DELETE FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+    db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
     res.json({ ok: true });
 });
 
-app.post('/api/alerts', async (req: Request, res: Response) => {
+app.post('/api/alerts', (req: Request, res: Response) => {
     const { endpoint, currency, direction, threshold } = req.body || {};
     if (!endpoint || !currency || !direction || threshold == null) {
         return res.status(400).json({ error: 'Campos obrigatórios: endpoint, currency, direction, threshold.' });
@@ -845,39 +862,37 @@ app.post('/api/alerts', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'threshold deve ser um número positivo.' });
     }
     try {
-        const sub = await db.get('SELECT id FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+        const sub = db.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?').get(endpoint);
         if (!sub) return res.status(404).json({ error: 'Subscription não encontrada. Ative as notificações primeiro.' });
-        const result = await db.run(
-            'INSERT INTO price_alerts (subscription_id, currency, direction, threshold, created_at) VALUES (?,?,?,?,?)',
-            [sub.id, currency, direction, thresh, Date.now()]
-        );
-        res.json({ id: result.lastID });
+        const result = db.prepare(
+            'INSERT INTO price_alerts (subscription_id, currency, direction, threshold, created_at) VALUES (?,?,?,?,?)'
+        ).run(sub.id, currency, direction, thresh, Date.now());
+        res.json({ id: result.lastInsertRowid });
     } catch (err: any) {
         console.error("Erro ao criar alerta:", err.message);
         res.status(500).json({ error: 'Erro ao criar alerta.' });
     }
 });
 
-app.get('/api/alerts', async (req: Request, res: Response) => {
+app.get('/api/alerts', (req: Request, res: Response) => {
     const { endpoint } = req.query;
     if (!endpoint) return res.status(400).json({ error: 'Parâmetro endpoint obrigatório.' });
     try {
-        const sub = await db.get('SELECT id FROM push_subscriptions WHERE endpoint = ?', [endpoint]);
+        const sub = db.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?').get(endpoint);
         if (!sub) return res.json([]);
-        const alerts = await db.all(
-            'SELECT id, currency, direction, threshold, created_at, triggered_at, active FROM price_alerts WHERE subscription_id = ? ORDER BY created_at DESC',
-            [sub.id]
-        );
+        const alerts = db.prepare(
+            'SELECT id, currency, direction, threshold, created_at, triggered_at, active FROM price_alerts WHERE subscription_id = ? ORDER BY created_at DESC'
+        ).all(sub.id);
         res.json(alerts);
     } catch (err: any) {
         res.status(500).json({ error: 'Erro ao listar alertas.' });
     }
 });
 
-app.delete('/api/alerts/:id', async (req: Request, res: Response) => {
+app.delete('/api/alerts/:id', (req: Request, res: Response) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido.' });
-    await db.run('DELETE FROM price_alerts WHERE id = ?', [id]);
+    db.prepare('DELETE FROM price_alerts WHERE id = ?').run(id);
     res.json({ ok: true });
 });
 
@@ -935,7 +950,7 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 
 async function startServer(): Promise<void> {
     validateEnv();
-    await initializeDatabase();
+    initializeDatabase(); // síncrono com better-sqlite3
     const server = http.createServer(app);
     wss = new WebSocketServer({ server });
     wss.on('connection', (ws: any) => {
