@@ -1,7 +1,7 @@
 module.exports = {
   apps : [{
     name        : "BitPanel", // Nome da sua aplicação no PM2
-    script      : "server.js",
+    script      : "dist/server.js",
     cwd         : __dirname,    // Mantém o diretório de trabalho correto
     watch       : false,      // Geralmente 'false' em produção para evitar reinícios acidentais
     exec_mode   : "fork",     // Confirmado como "fork"
