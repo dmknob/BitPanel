@@ -11,3 +11,6 @@ bitpanel.sqlite
 
 # Ignorar configuração teste de carga
 test.yml
+
+# Build TypeScript compilado (gerado em deploy com npm run build)
+dist/
