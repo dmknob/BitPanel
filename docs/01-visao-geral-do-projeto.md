@@ -52,12 +52,13 @@ tags: #arquitetura #overview
 
 ## Workers Internos
 
-| Worker | Frequência | Fontes |
-|--------|------------|--------|
-| `updateHighFrequencyData` | Cada `UPDATE_INTERVAL_SECONDS` (padrão 600s) | CoinGecko, Mempool.space |
-| `updateFearGreedData` | Diário às 00:15 | Alternative.me |
-| `updateLatestDailyData` | Diário às 00:15 | CoinGecko |
-| `syncHistoricDataOnStartup` | Na inicialização | CoinGecko (365 dias) |
+| Worker | Frequência | Fontes | Descrição / Otimização |
+|--------|------------|--------|------------------------|
+| `updateHighFrequencyData` | Cada `UPDATE_INTERVAL_SECONDS` (padrão 600s) | CoinGecko, Mempool.space | Preço BTC, USDT, taxas da mempool. |
+| `updateDominanceData` | A cada 1 hora | CoinGecko | Dominância do BTC (com cache de 1h no banco para evitar chamadas redundantes). |
+| `updateFearGreedData` | Cada `UPDATE_INTERVAL_SECONDS` (padrão 600s) | Alternative.me | Fear & Greed Index (atualizado conforme a data retornada pela API). |
+| `updateLatestDailyData` | Diário às 00:15 | CoinGecko | Fechamento diário do dia anterior. |
+| `syncHistoricDataOnStartup` | Na inicialização (apenas se DB estiver desatualizado) | CoinGecko (365 dias) | Sincroniza histórico na inicialização se o banco de dados contiver menos de 360 dias ou estiver com dados de mais de 2 dias atrás. |
 
 ---
 

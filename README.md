@@ -62,6 +62,7 @@ Acesse <http://localhost:3000> no navegador.
 | `DB_NAME` | `bitpanel.sqlite` | Caminho/nome do arquivo SQLite |
 | `UPDATE_INTERVAL_SECONDS` | `600` | Intervalo de atualização dos dados (segundos) |
 | `COINGECKO_API_KEY` | — | **Obrigatória.** Chave da API CoinGecko |
+| `COINGECKO_API_KEY_2` | _(vazio)_ | Segunda chave CoinGecko (opcional). Quando definida, o servidor alterna entre as duas chaves para dividir o consumo mensal. Fallback automático em caso de rate limit |
 | `ALLOWED_ORIGIN` | _(vazio)_ | Origem permitida para CORS. Use `*` apenas em dev |
 | `SENTRY_DSN` | _(vazio)_ | DSN do Sentry para monitoramento de erros (opcional) |
 
@@ -97,7 +98,7 @@ npm test
 |---|---|
 | Runtime | Node.js 18+ |
 | Framework HTTP | Express |
-| Banco de dados | SQLite (via `sqlite` + `sqlite3`) |
+| Banco de dados | SQLite (via `better-sqlite3`) |
 | Templates | EJS |
 | Frontend | Vanilla JS + CSS |
 | PWA | Service Worker + Web App Manifest |

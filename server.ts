@@ -171,13 +171,120 @@ function validateEnv(): void {
 // --- CLIENTE HTTP COM TIMEOUT ---
 const httpClient = axios.create({ timeout: 10_000 });
 
-const COINGECKO_HEADERS = (): Record<string, string> => ({ 'x-cg-demo-api-key': process.env.COINGECKO_API_KEY as string });
+// --- ROTAÇÃO DE CHAVES COINGECKO ---
+// Monta o pool de chaves disponíveis a partir das variáveis de ambiente.
+// Suporta COINGECKO_API_KEY (obrigatória) e COINGECKO_API_KEY_2 (opcional).
+// O balanceamento usa contagem estimada de chamadas por chave para manter
+// o consumo equilibrado (diferença máxima de ~5%).
+// Jitter aleatório é adicionado para que o padrão de uso pareça orgânico.
 
-async function fetchWithRetry(url: string, options: object = {}, retries: number = 3): Promise<any> {
+interface CoinGeckoKeyEntry {
+    key: string;
+    label: string;
+    callCount: number;       // chamadas acumuladas neste ciclo
+    resetTimestamp: number;  // timestamp do último reset mensal
+}
+
+function buildCoinGeckoKeyPool(): CoinGeckoKeyEntry[] {
+    const pool: CoinGeckoKeyEntry[] = [];
+    const now = Date.now();
+    if (process.env.COINGECKO_API_KEY) {
+        pool.push({ key: process.env.COINGECKO_API_KEY, label: 'KEY_1', callCount: 0, resetTimestamp: now });
+    }
+    if (process.env.COINGECKO_API_KEY_2) {
+        pool.push({ key: process.env.COINGECKO_API_KEY_2, label: 'KEY_2', callCount: 0, resetTimestamp: now });
+    }
+    if (pool.length > 1) {
+        console.log(`CoinGecko: ${pool.length} chaves carregadas — rotação ativada.`);
+    }
+    return pool;
+}
+
+let cgKeyPool: CoinGeckoKeyEntry[] = [];
+
+// Reseta contadores no início de cada mês (baseado em UTC, como o billing da CoinGecko)
+function maybeResetMonthlyCounts(): void {
+    const now = new Date();
+    for (const entry of cgKeyPool) {
+        const lastReset = new Date(entry.resetTimestamp);
+        if (now.getUTCMonth() !== lastReset.getUTCMonth() || now.getUTCFullYear() !== lastReset.getUTCFullYear()) {
+            console.log(`CoinGecko [${entry.label}]: resetando contador mensal (${entry.callCount} chamadas no mês anterior).`);
+            entry.callCount = 0;
+            entry.resetTimestamp = now.getTime();
+        }
+    }
+}
+
+/**
+ * Seleciona a chave com menor uso estimado.
+ * Quando há 2 chaves, escolhe a que tem menos chamadas acumuladas.
+ * Adiciona jitter (±3% de chance de escolher a outra) para parecer orgânico.
+ */
+function getCoinGeckoApiKey(): string {
+    if (cgKeyPool.length === 0) return process.env.COINGECKO_API_KEY as string;
+    if (cgKeyPool.length === 1) {
+        cgKeyPool[0].callCount++;
+        return cgKeyPool[0].key;
+    }
+
+    maybeResetMonthlyCounts();
+
+    // Ordenar por menor uso
+    const sorted = [...cgKeyPool].sort((a, b) => a.callCount - b.callCount);
+    const totalCalls = sorted.reduce((s, e) => s + e.callCount, 0);
+
+    let selected: CoinGeckoKeyEntry;
+
+    if (totalCalls === 0) {
+        // Primeira chamada — escolher aleatoriamente
+        selected = sorted[Math.random() < 0.5 ? 0 : 1];
+    } else {
+        // Jitter: ~3% de chance de usar a chave com mais uso (evita padrão previsível)
+        const jitter = Math.random();
+        selected = jitter < 0.03 ? sorted[sorted.length - 1] : sorted[0];
+    }
+
+    selected.callCount++;
+    return selected.key;
+}
+
+/** Retorna outra chave diferente da fornecida, para fallback. */
+function getAlternateCoinGeckoKey(currentKey: string): string | null {
+    if (cgKeyPool.length < 2) return null;
+    const alt = cgKeyPool.find(e => e.key !== currentKey);
+    if (alt) {
+        alt.callCount++;
+        return alt.key;
+    }
+    return null;
+}
+
+const COINGECKO_HEADERS = (apiKey?: string): Record<string, string> => ({
+    'x-cg-demo-api-key': apiKey || getCoinGeckoApiKey()
+});
+
+async function fetchWithRetry(url: string, options: any = {}, retries: number = 3): Promise<any> {
     for (let attempt = 0; attempt < retries; attempt++) {
         try {
             return await httpClient.get(url, options);
         } catch (err: any) {
+            const status = err?.response?.status;
+            // Fallback de chave: se recebeu 429 (rate limit) ou 403 e temos outra chave disponível
+            if ((status === 429 || status === 403) && options?.headers?.['x-cg-demo-api-key']) {
+                const currentKey = options.headers['x-cg-demo-api-key'];
+                const altKey = getAlternateCoinGeckoKey(currentKey);
+                if (altKey) {
+                    console.warn(`CoinGecko: chave bloqueada (HTTP ${status}), alternando para chave reserva...`);
+                    options = { ...options, headers: { ...options.headers, 'x-cg-demo-api-key': altKey } };
+                    // Tenta imediatamente com a chave alternativa
+                    try {
+                        return await httpClient.get(url, options);
+                    } catch (altErr: any) {
+                        console.error(`CoinGecko: chave reserva também falhou (HTTP ${altErr?.response?.status}).`);
+                        if (attempt === retries - 1) throw altErr;
+                    }
+                }
+            }
             if (attempt === retries - 1) throw err;
             await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
         }
@@ -403,10 +510,18 @@ async function updateNetworkMetrics(): Promise<void> {
     }
 }
 
-async function updateDominanceData(): Promise<void> {
+async function updateDominanceData(force: boolean = false): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
-    console.log(`[${ts}] Worker: Buscando dominância do Bitcoin...`);
     try {
+        if (!force) {
+            // Verificar cache no banco de dados para evitar chamadas redundantes
+            const cached: DominanceRow | undefined = db.prepare('SELECT * FROM btc_dominance_snapshot WHERE id = 1').get();
+            if (cached && (Date.now() - cached.last_updated < 60 * 60 * 1000)) { // 1 hora
+                console.log(`[${ts}] Worker: Dominância BTC já está atualizada no banco de dados (última atualização há menos de 1 hora). Pulando chamada à API.`);
+                return;
+            }
+        }
+        console.log(`[${ts}] Worker: Buscando dominância do Bitcoin...`);
         const res = await fetchWithRetry('https://api.coingecko.com/api/v3/global', { headers: COINGECKO_HEADERS() });
         const dominancePct: number = res.data?.data?.market_cap_percentage?.btc;
         if (typeof dominancePct !== 'number') throw new Error('Dominância não retornada pela API');
@@ -428,11 +543,14 @@ async function updateFearGreedData(): Promise<void> {
         console.log(`[${ts}] Worker: Buscando Fear & Greed Index...`);
         const res = await fetchWithRetry('https://api.alternative.me/fng/?limit=1&format=json');
         const fng = res.data.data[0];
-        const today = new Date().toISOString().split('T')[0];
+        if (!fng || !fng.timestamp) throw new Error('Dados de Fear & Greed inválidos');
+
+        const fngDate = new Date(parseInt(fng.timestamp) * 1000).toISOString().split('T')[0];
+
         db.prepare(
             'INSERT OR REPLACE INTO fear_greed_history (date, value, classification, last_updated) VALUES (?,?,?,?)'
-        ).run(today, fng.value, fng.value_classification, Date.now());
-        console.log(`[${ts}] Worker: Fear & Greed Index salvo para ${today}.`);
+        ).run(fngDate, parseInt(fng.value), fng.value_classification, Date.now());
+        console.log(`[${ts}] Worker: Fear & Greed Index salvo para ${fngDate} (${fng.value}).`);
     } catch (err: any) {
         console.error(`[${ts}] Worker: ERRO ao buscar Fear & Greed:`, err.message);
         if (Sentry) Sentry.captureException(err);
@@ -462,8 +580,23 @@ async function updateLightningData(): Promise<void> {
 
 async function syncHistoricDataOnStartup(): Promise<void> {
     const ts = new Date().toLocaleString('pt-BR');
-    console.log(`[${ts}] Worker (Inicialização): Sincronizando histórico de preços (USD & BRL)...`);
     try {
+        // Verificar se já temos dados históricos suficientes e se estão atualizados
+        const countRow = db.prepare('SELECT COUNT(*) as count FROM btc_daily_close_prices').get();
+        const rowCount = countRow ? countRow.count : 0;
+        const lastRecord = db.prepare('SELECT date FROM btc_daily_close_prices ORDER BY date DESC LIMIT 1').get();
+
+        if (rowCount >= 360 && lastRecord) {
+            const lastDate = new Date(lastRecord.date + 'T00:00:00');
+            const diffTime = Math.abs(Date.now() - lastDate.getTime());
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            if (diffDays <= 2) {
+                console.log(`[${ts}] Worker (Inicialização): Histórico de preços já está atualizado no banco de dados (${rowCount} registros). Pulando sincronização.`);
+                return;
+            }
+        }
+
+        console.log(`[${ts}] Worker (Inicialização): Sincronizando histórico de preços (USD & BRL)...`);
         const [usdRes, brlRes] = await Promise.all([
             fetchWithRetry('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=365&interval=daily', { headers: COINGECKO_HEADERS() }),
             fetchWithRetry('https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=brl&days=365&interval=daily', { headers: COINGECKO_HEADERS() }),
@@ -690,6 +823,13 @@ function scheduleHighFrequencyWorker(): void {
     cron.schedule(CRON_SCHEDULE_HIGH_FREQUENCY, () => {
         updateHighFrequencyData();
         updateNetworkMetrics();
+        updateFearGreedData();
+    });
+}
+
+function scheduleDominanceWorker(): void {
+    console.log("Agendando worker de dominância a cada 1 hora.");
+    cron.schedule('0 * * * *', () => {
         updateDominanceData();
     });
 }
@@ -698,7 +838,6 @@ function scheduleDailyWorker(): void {
     cron.schedule('15 0 * * *', () => {
         const ts = new Date().toLocaleString('pt-BR');
         console.log(`[${ts}] SCHEDULE: Disparando workers diários...`);
-        updateFearGreedData();
         updateLatestDailyData();
         updateLightningData();
     });
@@ -950,6 +1089,7 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 
 async function startServer(): Promise<void> {
     validateEnv();
+    cgKeyPool = buildCoinGeckoKeyPool();
     initializeDatabase(); // síncrono com better-sqlite3
     const server = http.createServer(app);
     wss = new WebSocketServer({ server });
@@ -961,6 +1101,7 @@ async function startServer(): Promise<void> {
     server.listen(PORT, () => {
         console.log(`Servidor rodando em http://localhost:${PORT}`);
         scheduleHighFrequencyWorker();
+        scheduleDominanceWorker();
         scheduleDailyWorker();
         console.log("Workers agendados. Disparando carga inicial de dados...");
         initialDataLoadPromise = Promise.all([

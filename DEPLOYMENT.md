@@ -75,6 +75,7 @@ Após clonar o repositório, crie o arquivo `.env` na **raiz do diretório do pr
 * `DB_NAME`: Nome do arquivo do banco de dados SQLite (ex: `bitpanel.sqlite`).
 * `UPDATE_INTERVAL_SECONDS`: Frequência de atualização dos dados em segundos (ex: `300` para 5 minutos).
 * `COINGECKO_API_KEY`: Sua chave de API da CoinGecko. **Esta chave é sensível e não deve ser versionada no Git.**
+* `COINGECKO_API_KEY_2` *(opcional)*: Segunda chave de API da CoinGecko. Quando presente, o servidor alterna automaticamente entre as duas chaves para dividir o consumo mensal e evitar atingir o limite de 10.000 chamadas/mês do plano gratuito. Se uma chave receber HTTP 429 (rate limit) ou 403, o servidor tenta automaticamente com a outra.
 
 **Exemplo de `.env`:**
 
@@ -83,9 +84,10 @@ PORT=3000
 DB_NAME=bitpanel.sqlite
 UPDATE_INTERVAL_SECONDS=300
 COINGECKO_API_KEY=SUA_CHAVE_DE_API_DA_COINGECKO_AQUI
+COINGECKO_API_KEY_2=SUA_SEGUNDA_CHAVE_DA_COINGECKO_AQUI
 ```
 
-**⚠️ Atenção:** Substitua `SUA_CHAVE_DE_API_DA_COINGECKO_AQUI` pela sua chave real.
+**⚠️ Atenção:** Substitua `SUA_CHAVE_DE_API_DA_COINGECKO_AQUI` e `SUA_SEGUNDA_CHAVE_DA_COINGECKO_AQUI` pelas suas chaves reais. A segunda chave é opcional — se omitida, o servidor funciona normalmente com apenas uma chave.
 
 ---
 
