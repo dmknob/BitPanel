@@ -1,6 +1,6 @@
 module.exports = {
   apps : [{
-    name        : "BitPanel", // Nome da sua aplicação no PM2
+    name        : "bitpanel.com.br", // Nome da sua aplicação no PM2
     script      : "dist/server.js",
     cwd         : __dirname,    // Mantém o diretório de trabalho correto
     watch       : false,      // Geralmente 'false' em produção para evitar reinícios acidentais
@@ -12,7 +12,7 @@ module.exports = {
     // --- Configurações de Otimização de Memória ---
     max_memory_restart: "120M", // Reinicia se usar mais de 120MB de RAM (se o uso normal é 79.3M)
     // --- Configurações de Log (Removidas para usar o padrão do PM2) ---
-    // O PM2 vai automaticamente salvar os logs em ~/.pm2/logs/BitPanel-out.log e BitPanel-error.log
+    // O PM2 vai automaticamente salvar os logs em ~/.pm2/logs/bitpanel.com.br-out.log e bitpanel.com.br-error.log
     time: true                      // Adiciona timestamp aos logs (ainda útil para logs padrão)
   }]
 };
