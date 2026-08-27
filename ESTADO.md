@@ -40,7 +40,7 @@ Qualquer um destes confirma:
    `capacity_btc`, `channels`, `nodes`.
 2. **Health check:** `curl -s https://SEU_DOMINIO/api/health` → `{ status: "ok", uptime, ... }`.
 3. **No servidor:** `git -C /var/www/BitPanel log --oneline -1` deve bater com `origin/main`.
-4. **PM2:** `pm2 info BitPanel` (uptime/restarts) e `pm2 logs BitPanel --lines 50`.
+4. **PM2:** `pm2 info bitpanel.com.br` (uptime/restarts) e `pm2 logs bitpanel.com.br --lines 50`.
 5. **Front:** card "⚡ Lightning Network" visível no dashboard e Service Worker em
    `bitpanel-cache-v5` (DevTools → Application → Cache Storage).
 

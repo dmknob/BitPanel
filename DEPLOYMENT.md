@@ -49,17 +49,17 @@ Certifique-se de que o servidor possui os seguintes softwares instalados:
 
 ## 2. Obtenção do Código-Fonte
 
-Clone o repositório **BitPanel** para o **diretório de sua escolha** no servidor (ex: `/opt/BitPanel/`, `/srv/BitPanel/`). Este diretório se tornará a **raiz do projeto BitPanel**.
+Clone o repositório **BitPanel** para o **diretório de sua escolha** no servidor (ex: `/var/www/BitPanel/`, `/srv/BitPanel/`). Este diretório se tornará a **raiz do projeto BitPanel**.
 
 ```bash
-# Exemplo de clonagem para /opt/bitpanel/
-sudo mkdir -p /opt/BitPanel # Cria o diretório pai, se necessário
-sudo chown seu_usuario:seu_usuario /opt/BitPanel # Garanta que seu usuário tenha permissão
-cd /opt/ # Navegue até o diretório de destino
+# Exemplo de clonagem para /var/www/BitPanel/
+sudo mkdir -p /var/www/BitPanel # Cria o diretório pai, se necessário
+sudo chown seu_usuario:seu_usuario /var/www/BitPanel # Garanta que seu usuário tenha permissão
+cd /var/www/BitPanel # Navegue até a raiz do projeto
 git clone [https://github.com/dmknob/BitPanel.git](https://github.com/dmknob/BitPanel.git) . # Clona o repositório diretamente para a pasta atual (BitPanel)
 ```
 
-**Nota:** Substitua `seu_usuario` pelo nome de usuário que executará o aplicativo. Para todos os comandos subsequentes, assume-se que você está na **raiz do diretório do projeto BitPanel** (ex: `/opt/BitPanel/`).
+**Nota:** Substitua `seu_usuario` pelo nome de usuário que executará o aplicativo. Para todos os comandos subsequentes, assume-se que você está na **raiz do diretório do projeto BitPanel** (ex: `/var/www/BitPanel/`).
 
 ---
 
@@ -96,7 +96,7 @@ COINGECKO_API_KEY_2=SUA_SEGUNDA_CHAVE_DA_COINGECKO_AQUI
 Navegue até a raiz do diretório do projeto (`BitPanel/`) e instale as dependências do Node.js:
 
 ```bash
-cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /opt/BitPanel/
+cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /var/www/BitPanel/
 npm install
 ```
 
@@ -107,7 +107,7 @@ npm install
 O PM2 é usado para manter o aplicativo Node.js rodando em segundo plano e reiniciá-lo automaticamente em caso de falha. **Execute estes comandos a partir da raiz do diretório do projeto BitPanel.**
 
 ```bash
-cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /opt/BitPanel/
+cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /var/www/BitPanel/
 pm2 start ecosystem.config.js
 pm2 save # Salva a configuração atual para que o PM2 reinicie com o sistema
 pm2 startup # Gera o comando para PM2 iniciar automaticamente no boot do sistema (execute o comando fornecido)
@@ -185,7 +185,7 @@ Um script Bash lida com o backup diário do banco de dados SQLite e com a polít
 
     * O script de backup precisa de permissão de execução. **Execute este comando a partir da raiz do diretório do projeto BitPanel.**
         ```bash
-        cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /opt/BitPanel/
+        cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /var/www/BitPanel/
         chmod +x scripts/backup_bitpanel_db.sh
         ```
 
@@ -207,12 +207,12 @@ Um script Bash lida com o backup diário do banco de dados SQLite e com a polít
 
 * **Logs do Aplicativo (PM2):**
     ```bash
-    pm2 logs BitPanel
+    pm2 logs bitpanel.com.br
     ```
 * **Logs do Backup (Crontab):**
     * O log do backup será criado na raiz do diretório do projeto.
     ```bash
-    tail -f /caminho/absoluto/do/seu/projeto/BitPanel/cron_backup_log.log # Ex: /opt/BitPanel/cron_backup_log.log
+    tail -f /caminho/absoluto/do/seu/projeto/BitPanel/cron_backup_log.log # Ex: /var/www/BitPanel/cron_backup_log.log
     ```
 * **Logs do Nginx:**
     ```bash
@@ -242,8 +242,8 @@ Em caso de necessidade de restaurar o banco de dados:
 
 1.  **Pare o serviço do BitPanel:** **Execute este comando a partir da raiz do diretório do projeto.**
     ```bash
-    cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /opt/BitPanel/
-    pm2 stop BitPanel
+    cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /var/www/BitPanel/
+    pm2 stop bitpanel.com.br
     ```
 2.  **Identifique o Backup:**
     * Navegue até o diretório de backups (que será criado em `~/backups/BitPanel_db/` em relação ao `HOME` do usuário que executa o script).
@@ -253,7 +253,7 @@ Em caso de necessidade de restaurar o banco de dados:
     * **Faça um backup do banco de dados ATUAL (mesmo que corrompido) antes de restaurar, para ter um ponto de recuperação caso o novo backup também seja problemático.**
     * **Execute estes comandos a partir da raiz do diretório do projeto.**
     ```bash
-    cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /opt/BitPanel/
+    cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /var/www/BitPanel/
     mv bitpanel.sqlite bitpanel.sqlite.corrupted_$(date +%Y%m%d%H%M%S)
     cp ~/backups/BitPanel_db/SEU_ARQUIVO_DE_BACKUP.bak bitpanel.sqlite
     ```
@@ -261,6 +261,6 @@ Em caso de necessidade de restaurar o banco de dados:
     * **Atenção:** O caminho `~/backups/BitPanel_db/` é relativo ao HOME do usuário que executa o script. Ajuste se o diretório de backups foi configurado de forma diferente.
 4.  **Inicie o serviço do BitPanel:** **Execute este comando a partir da raiz do diretório do projeto.**
     ```bash
-    cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /opt/BitPanel/
-    pm2 start BitPanel
+    cd /caminho/absoluto/do/seu/projeto/BitPanel/ # Ex: /var/www/BitPanel/
+    pm2 start bitpanel.com.br
     ```
