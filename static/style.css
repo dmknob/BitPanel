@@ -51,12 +51,21 @@ input:checked + .slider:before { transform: translateX(26px); }
 .slider.round:before { border-radius: 50%; }
 
 /* --- Layout Principal (Grid Responsivo) --- */
-.dashboard-container { display: grid; grid-template-columns: repeat(auto-fit, 380px); justify-content: center; gap: 25px; width: 100%; max-width: 1800px; margin: 0 auto; }
+.dashboard-container { display: grid; grid-template-columns: repeat(auto-fit, 380px); justify-content: center; align-items: start; gap: 25px; width: 100%; max-width: 1800px; margin: 0 auto; }
 
 /* --- Estilos dos Cards --- */
 .indicador { background-color: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; transition: background-color 0.3s, border-color 0.3s; }
-.indicador h2 { margin-top: 0; margin-bottom: 10px; font-size: 1.1em; color: var(--header-color); border-bottom: 1px solid var(--border-color); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+.indicador h2 { margin-top: 0; margin-bottom: 10px; font-size: 1.1em; color: var(--header-color); border-bottom: 1px solid var(--border-color); padding-bottom: 8px; display: flex; justify-content: flex-start; gap: 8px; align-items: center; }
 .fonte-api { font-size: 0.7em; font-weight: normal; background-color: #e9ecef; color: #495057; padding: 3px 6px; border-radius: 4px; white-space: nowrap; }
+.indicador h2 .fonte-api { margin-left: auto; }
+
+/* --- Reordenação de cards (arrastar para reordenar) --- */
+.card-drag-handle { cursor: grab; color: var(--text-color-secondary); opacity: 0.45; font-size: 0.9em; line-height: 1; user-select: none; transition: opacity 0.2s; }
+.card-drag-handle:hover { opacity: 1; }
+.card-drag-handle:active { cursor: grabbing; }
+.indicador.dragging { opacity: 0.4; }
+.card-order-reset { margin-top: 14px; background: transparent; border: 1px solid var(--border-color); color: var(--text-color-secondary); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; transition: background-color 0.2s, color 0.2s; }
+.card-order-reset:hover { background-color: var(--accent-color-1); color: #fff; border-color: var(--accent-color-1); }
 .indicador p { font-size: 1.6em; font-weight: 600; color: var(--accent-color-1); margin: 5px 0; }
 #usdtbrl-price { color: var(--accent-color-3); }
 #fear-greed-value { font-size: 2em; font-weight: bold; margin-bottom: 5px; }

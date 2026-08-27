@@ -1,4 +1,4 @@
-const CACHE_NAME = 'bitpanel-cache-v5';
+const CACHE_NAME = 'bitpanel-cache-v6';
 const urlsToCache = [
     '/',
     '/dca',
@@ -6,6 +6,7 @@ const urlsToCache = [
     '/style.css',
     '/js/common.js',
     '/js/dashboard.js',
+    '/js/card-reorder.js',
     '/js/dca.js',
     '/js/tv.js',
     '/images/icon-192x192.png',
