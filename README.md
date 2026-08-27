@@ -34,7 +34,7 @@ BitPanel é um painel de indicadores Bitcoin rodando localmente ou em servidor p
 
 ## Pré-requisitos
 
-- **Node.js 18+**
+- **Node.js 22+**
 - **API Key gratuita do CoinGecko** — obtenha em <https://www.coingecko.com/api>
 
 ---
@@ -74,14 +74,6 @@ Consulte [.env.example](.env.example) para o template completo.
 
 Veja o guia completo em [DEPLOYMENT.md](DEPLOYMENT.md), que cobre configuração com **PM2** e **Nginx** em um servidor Linux.
 
-Para deploy via **Docker**, use o `docker-compose.yml` incluído:
-
-```bash
-cp .env.example .env
-# edite .env com suas variáveis
-docker compose up -d
-```
-
 ---
 
 ## Testes
@@ -96,7 +88,7 @@ npm test
 
 | Camada | Tecnologia |
 |---|---|
-| Runtime | Node.js 18+ |
+| Runtime | Node.js 22+ |
 | Framework HTTP | Express |
 | Banco de dados | SQLite (via `better-sqlite3`) |
 | Templates | EJS |

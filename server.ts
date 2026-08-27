@@ -188,14 +188,47 @@ interface CoinGeckoKeyEntry {
 function buildCoinGeckoKeyPool(): CoinGeckoKeyEntry[] {
     const pool: CoinGeckoKeyEntry[] = [];
     const now = Date.now();
-    if (process.env.COINGECKO_API_KEY) {
-        pool.push({ key: process.env.COINGECKO_API_KEY, label: 'KEY_1', callCount: 0, resetTimestamp: now });
+    const seen = new Set<string>();
+    const PLACEHOLDER = 'SUA_API_KEY_AQUI';
+
+    // Nomes de variáveis EXATOS — sem grafias alternativas. A segunda chave é
+    // sempre COINGECKO_API_KEY_2 (com underscore antes do 2).
+    const sources: Array<{ name: string; value: string | undefined }> = [
+        { name: 'COINGECKO_API_KEY', value: process.env.COINGECKO_API_KEY },
+        { name: 'COINGECKO_API_KEY_2', value: process.env.COINGECKO_API_KEY_2 },
+    ];
+
+    for (const { name, value } of sources) {
+        const key = value?.trim();
+        if (!key || key === PLACEHOLDER) continue;
+        // Dedup: duas cotas só somam se as chaves forem REALMENTE distintas.
+        if (seen.has(key)) {
+            console.warn(`CoinGecko: ${name} repete uma chave já carregada — ignorada.`);
+            continue;
+        }
+        seen.add(key);
+        pool.push({ key, label: name, callCount: 0, resetTimestamp: now });
     }
-    if (process.env.COINGECKO_API_KEY_2) {
-        pool.push({ key: process.env.COINGECKO_API_KEY_2, label: 'KEY_2', callCount: 0, resetTimestamp: now });
-    }
-    if (pool.length > 1) {
-        console.log(`CoinGecko: ${pool.length} chaves carregadas — rotação ativada.`);
+
+    // A 2ª chave foi FORNECIDA (não vazia / não placeholder)? Se sim, a intenção
+    // é balancear entre 2 chaves.
+    const key2Raw = process.env.COINGECKO_API_KEY_2?.trim();
+    const key2Intended = !!key2Raw && key2Raw !== PLACEHOLDER;
+
+    if (pool.length >= 2) {
+        console.log(`CoinGecko: ${pool.length} chaves distintas carregadas — balanceamento ATIVADO.`);
+    } else if (key2Intended) {
+        // Intenção era 2 chaves, mas apenas 1 entrou no pool (provavelmente a 2ª
+        // é IGUAL à 1ª). Aviso bem visível — não é um estado silencioso.
+        console.warn('==================== ATENÇÃO CoinGecko ====================');
+        console.warn('COINGECKO_API_KEY_2 foi definida, mas apenas 1 chave DISTINTA');
+        console.warn('foi carregada — o balanceamento está DESATIVADO.');
+        console.warn('Causa provável: a 2ª chave é idêntica à primeira. Use chaves');
+        console.warn('distintas para somar as cotas mensais.');
+        console.warn('===========================================================');
+        if (Sentry) Sentry.captureMessage('CoinGecko: COINGECKO_API_KEY_2 definida mas balanceamento inativo (chave duplicada?)', 'warning');
+    } else {
+        console.log('CoinGecko: 1 chave carregada (COINGECKO_API_KEY_2 não definida) — balanceamento inativo.');
     }
     return pool;
 }

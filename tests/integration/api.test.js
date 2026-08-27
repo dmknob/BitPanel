@@ -23,18 +23,18 @@ jest.mock('node-cron', () => ({
 
 const request = require('supertest');
 const express = require('express');
-const { open } = require('sqlite');
-const sqlite3 = require('sqlite3');
+// Driver SQLite: better-sqlite3 (API síncrona, sem wrapper `sqlite`). Ver ADR-001.
+const Database = require('better-sqlite3');
 const path = require('path');
 
 // Criar app de teste isolado (sem iniciar o servidor real)
 let app;
 let db;
 
-async function setupTestApp() {
-    db = await open({ filename: ':memory:', driver: sqlite3.Database });
+function setupTestApp() {
+    db = new Database(':memory:');
 
-    await db.exec(`
+    db.exec(`
         CREATE TABLE IF NOT EXISTS current_prices (symbol TEXT PRIMARY KEY, price REAL NOT NULL, last_updated INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS mempool_snapshot (id INTEGER PRIMARY KEY DEFAULT 1, fastest_fee INTEGER, half_hour_fee INTEGER, hour_fee INTEGER, block_height INTEGER, tx_count INTEGER, calculated_supply REAL, last_updated INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS btc_global_metrics_history (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER NOT NULL, market_cap_usd REAL NOT NULL);
@@ -46,48 +46,50 @@ async function setupTestApp() {
 
     // Inserir dados de teste
     const now = Date.now();
-    await db.run('INSERT INTO current_prices VALUES (?,?,?)', ['BTC-USD', 95000, now]);
-    await db.run('INSERT INTO current_prices VALUES (?,?,?)', ['BTC-BRL', 520000, now]);
-    await db.run('INSERT INTO current_prices VALUES (?,?,?)', ['BTC-EUR', 87000, now]);
-    await db.run('INSERT INTO current_prices VALUES (?,?,?)', ['USDT-BRL', 5.47, now]);
-    await db.run('INSERT INTO mempool_snapshot VALUES (1,45,32,18,896000,28500,19700000,?)', [now]);
-    await db.run('INSERT INTO btc_global_metrics_history (timestamp, market_cap_usd) VALUES (?,?)', [now, 1870000000000]);
-    await db.run('INSERT INTO fear_greed_history VALUES (?,?,?,?)', ['2026-05-15', 65, 'Greed', now]);
-    await db.run('INSERT INTO network_metrics_snapshot VALUES (1,650.5,88000000000000,2.5,598,?)', [now]);
-    await db.run('INSERT INTO btc_dominance_snapshot VALUES (1,54.3,?)', [now]);
+    db.prepare('INSERT INTO current_prices VALUES (?,?,?)').run('BTC-USD', 95000, now);
+    db.prepare('INSERT INTO current_prices VALUES (?,?,?)').run('BTC-BRL', 520000, now);
+    db.prepare('INSERT INTO current_prices VALUES (?,?,?)').run('BTC-EUR', 87000, now);
+    db.prepare('INSERT INTO current_prices VALUES (?,?,?)').run('USDT-BRL', 5.47, now);
+    db.prepare('INSERT INTO mempool_snapshot VALUES (1,45,32,18,896000,28500,19700000,?)').run(now);
+    db.prepare('INSERT INTO btc_global_metrics_history (timestamp, market_cap_usd) VALUES (?,?)').run(now, 1870000000000);
+    db.prepare('INSERT INTO fear_greed_history VALUES (?,?,?,?)').run('2026-05-15', 65, 'Greed', now);
+    db.prepare('INSERT INTO network_metrics_snapshot VALUES (1,650.5,88000000000000,2.5,598,?)').run(now);
+    db.prepare('INSERT INTO btc_dominance_snapshot VALUES (1,54.3,?)').run(now);
 
-    // Inserir dados históricos suficientes para SMA200
-    const stmt = await db.prepare('INSERT OR IGNORE INTO btc_daily_close_prices VALUES (?,?,?)');
-    for (let i = 0; i < 365; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        await stmt.run(d.toISOString().split('T')[0], 90000 + i * 10, 490000 + i * 50);
-    }
-    await stmt.finalize();
+    // Inserir dados históricos suficientes para SMA200 (transação para inserção em lote)
+    const insertDaily = db.prepare('INSERT OR IGNORE INTO btc_daily_close_prices VALUES (?,?,?)');
+    const insertDailyMany = db.transaction(() => {
+        for (let i = 0; i < 365; i++) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            insertDaily.run(d.toISOString().split('T')[0], 90000 + i * 10, 490000 + i * 50);
+        }
+    });
+    insertDailyMany();
 
     // Criar app Express mínimo para testes
     app = express();
     app.set('view engine', 'ejs');
     app.set('views', path.join(__dirname, '../../views'));
 
-    app.get('/api/health', async (req, res) => {
+    app.get('/api/health', (req, res) => {
         try {
-            await db.get('SELECT 1');
+            db.prepare('SELECT 1').get();
             res.json({ status: 'ok', timestamp: Date.now(), uptime: process.uptime() });
         } catch {
             res.status(503).json({ status: 'error', timestamp: Date.now() });
         }
     });
 
-    app.get('/api/data', async (req, res) => {
+    app.get('/api/data', (req, res) => {
         try {
-            const prices = await db.all('SELECT * FROM current_prices');
-            const fearGreed = await db.get('SELECT * FROM fear_greed_history ORDER BY date DESC LIMIT 1');
-            const globalMetrics = await db.get('SELECT * FROM btc_global_metrics_history ORDER BY timestamp DESC LIMIT 1');
-            const dailyPrices = await db.all('SELECT price_usd FROM btc_daily_close_prices ORDER BY date DESC LIMIT 200');
-            const mempool = await db.get('SELECT * FROM mempool_snapshot WHERE id = 1');
-            const network = await db.get('SELECT * FROM network_metrics_snapshot WHERE id = 1');
-            const dominance = await db.get('SELECT * FROM btc_dominance_snapshot WHERE id = 1');
+            const prices = db.prepare('SELECT * FROM current_prices').all();
+            const fearGreed = db.prepare('SELECT * FROM fear_greed_history ORDER BY date DESC LIMIT 1').get();
+            const globalMetrics = db.prepare('SELECT * FROM btc_global_metrics_history ORDER BY timestamp DESC LIMIT 1').get();
+            const dailyPrices = db.prepare('SELECT price_usd FROM btc_daily_close_prices ORDER BY date DESC LIMIT 200').all();
+            const mempool = db.prepare('SELECT * FROM mempool_snapshot WHERE id = 1').get();
+            const network = db.prepare('SELECT * FROM network_metrics_snapshot WHERE id = 1').get();
+            const dominance = db.prepare('SELECT * FROM btc_dominance_snapshot WHERE id = 1').get();
 
             const priceMap = Object.fromEntries(prices.map(p => [p.symbol, p.price]));
             const btcUsd = priceMap['BTC-USD'];
@@ -116,31 +118,30 @@ async function setupTestApp() {
         }
     });
 
-    app.get('/api/historical-prices', async (req, res) => {
+    app.get('/api/historical-prices', (req, res) => {
         const days = Math.min(365, Math.max(1, parseInt(req.query.days) || 365));
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - days);
-        const data = await db.all(
-            'SELECT date, price_usd, price_brl FROM btc_daily_close_prices WHERE date >= ? ORDER BY date ASC',
-            [startDate.toISOString().split('T')[0]]
-        );
+        const data = db.prepare(
+            'SELECT date, price_usd, price_brl FROM btc_daily_close_prices WHERE date >= ? ORDER BY date ASC'
+        ).all(startDate.toISOString().split('T')[0]);
         res.json(data);
     });
 
-    app.get('/api/fear-greed-history', async (req, res) => {
-        const data = await db.all('SELECT date, value, classification FROM fear_greed_history ORDER BY date DESC LIMIT 90');
+    app.get('/api/fear-greed-history', (req, res) => {
+        const data = db.prepare('SELECT date, value, classification FROM fear_greed_history ORDER BY date DESC LIMIT 90').all();
         res.json(data.reverse());
     });
 
     return app;
 }
 
-beforeAll(async () => {
-    await setupTestApp();
-}, 10000);
+beforeAll(() => {
+    setupTestApp();
+});
 
-afterAll(async () => {
-    if (db) await db.close();
+afterAll(() => {
+    if (db) db.close();
 });
 
 // --- TESTES ---

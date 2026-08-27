@@ -185,7 +185,7 @@ function calculateBitcoinSupply(blockHeight) {
 **Conteúdo mínimo:**
 - O que é o BitPanel
 - Screenshot do dashboard
-- Pré-requisitos (Node.js 18+, API Key CoinGecko)
+- Pré-requisitos (Node.js 22+, API Key CoinGecko)
 - Como instalar e rodar localmente (`npm install && cp .env.example .env && npm start`)
 - Variáveis de ambiente disponíveis
 - Link para `DEPLOYMENT.md`

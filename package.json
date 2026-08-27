@@ -11,7 +11,9 @@
     "test": "jest --forceExit",
     "test:coverage": "jest --coverage --forceExit",
     "typecheck": "tsc --noEmit",
-    "generate-vapid": "node scripts/generate-vapid.js"
+    "generate-vapid": "node scripts/generate-vapid.js",
+    "env:check": "node scripts/sync-env.js --check",
+    "env:sync": "node scripts/sync-env.js"
   },
   "keywords": [
     "bitcoin",
@@ -52,6 +54,11 @@
     "testEnvironment": "node",
     "testMatch": [
       "**/tests/**/*.test.js"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/dist/",
+      "/.claude/"
     ],
     "collectCoverageFrom": [
       "server.ts",
