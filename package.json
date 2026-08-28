@@ -5,7 +5,7 @@
   "main": "server.ts",
   "scripts": {
     "start": "ts-node server.ts",
-    "build": "tsc && cp -r views dist/views && cp -r static dist/static",
+    "build": "tsc && rm -rf dist/views dist/static && cp -r views dist/views && cp -r static dist/static",
     "start:prod": "node dist/server.js",
     "dev": "ts-node server.ts",
     "test": "jest --forceExit",
