@@ -80,6 +80,7 @@ input:checked + .slider:before { transform: translateX(26px); }
 #mempool-block-height, #mempool-tx-count { font-size: 1.5em; }
 .sub-text { font-size: 0.9em !important; font-weight: normal !important; color: var(--text-color-secondary) !important; margin-top: -5px !important; }
 .update-note { font-size: 0.8em !important; color: var(--text-color-secondary) !important; font-weight: normal !important; text-align: right; margin-top: 10px; margin-bottom: 0; }
+.card-age { font-size: 0.72em !important; opacity: 0.85; font-style: italic; margin-top: 12px; }
 
 /* Calculadoras */
 .calculadora-sats-input-group { margin-bottom: 15px; }

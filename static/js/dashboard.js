@@ -47,6 +47,61 @@ let wsPollingInterval = null;
 const JITTER_MS = 10000; // Variação aleatória de até 10 segundos
 
 
+// --- IDADE DOS DADOS POR CARD ---
+// Mapeia um elemento-âncora já existente de cada card para a fonte no payload.
+// Fontes têm cadências diferentes (preços ~10min, dominância 1h, Lightning diário).
+const CARD_SOURCES = [
+    ['#bitcoin-preco-brl', 'prices'],
+    ['#bitcoin-preco-usd', 'prices'],
+    ['#usdtbrl-price', 'prices'],
+    ['#bitcoin-preco-eur', 'prices'],
+    ['#bitcoin-marketcap-usd', 'marketCap'],
+    ['#bitcoin-mayer-multiple', 'prices'],
+    ['#mempool-fee-fastest', 'mempool'],
+    ['#btc-hash-rate', 'network'],
+    ['#btc-s2f-ratio', 'dominance'],
+    ['#lightning-capacity', 'lightning'],
+    ['#fear-greed-value', 'fearGreed'],
+];
+let lastTimestamps = {};
+
+function formatarIdade(ts) {
+    if (!ts) return null;
+    const min = Math.floor((Date.now() - ts) / 60000);
+    if (min < 1) return 'agora mesmo';
+    if (min < 60) return `há ${min} min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `há ${h} h`;
+    const d = Math.floor(h / 24);
+    return d === 1 ? 'ontem' : `há ${d} dias`;
+}
+
+function renderCardTimestamps(data) {
+    if (data && data.timestamps) lastTimestamps = data.timestamps;
+    CARD_SOURCES.forEach(([sel, source]) => {
+        const anchor = document.querySelector(sel);
+        const card = anchor && anchor.closest('.indicador');
+        if (!card) return;
+        let el = card.querySelector('.card-age');
+        if (!el) {
+            el = document.createElement('p');
+            el.className = 'update-note card-age';
+            card.appendChild(el);
+        }
+        const ts = lastTimestamps[source];
+        if (ts) {
+            el.textContent = `atualizado ${formatarIdade(ts)}`;
+            el.title = new Date(ts).toLocaleString('pt-BR');
+        } else {
+            el.textContent = '';
+            el.removeAttribute('title');
+        }
+    });
+}
+
+// Mantém a idade "viva" entre as atualizações do payload.
+setInterval(() => renderCardTimestamps(), 60000);
+
 // --- FUNÇÃO DE RENDERIZAÇÃO ---
 function renderData(data) {
 
@@ -77,11 +132,8 @@ function renderData(data) {
 
     fearGreedValueElement.textContent = data.fearGreed?.value || 'N/D';
     fearGreedClassificationElement.textContent = data.fearGreed?.classification || 'N/D';
-    if (data.fearGreed?.last_updated) {
-        fearGreedLastUpdatedElement.textContent = new Date(data.fearGreed.last_updated).toLocaleString('pt-BR');
-    } else {
-        fearGreedLastUpdatedElement.textContent = 'N/D';
-    }
+    // Idade dos dados por card, por fonte (inclui F&G).
+    renderCardTimestamps(data);
 
     feeFastestElement.textContent = `${data.mempool?.fastest_fee || 'N/D'} sat/vB`;
     feeHalfHourElement.textContent = `${data.mempool?.half_hour_fee || 'N/D'} sat/vB`;

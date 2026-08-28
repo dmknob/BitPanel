@@ -126,6 +126,16 @@ interface ApiDataPayload {
         nodes: number | null;
         last_updated: number | null;
     };
+    // Idade dos dados por fonte (epoch ms). Fontes atualizam em cadências diferentes.
+    timestamps: {
+        prices: number | null;
+        mempool: number | null;
+        network: number | null;
+        dominance: number | null;
+        fearGreed: number | null;
+        lightning: number | null;
+        marketCap: number | null;
+    };
 }
 
 // web-push (opcional — ativo somente se VAPID_PUBLIC_KEY estiver definido no .env)
@@ -830,6 +840,15 @@ async function buildDataPayload(): Promise<ApiDataPayload> {
             channels: lightning?.channels ?? null,
             nodes: lightning?.nodes ?? null,
             last_updated: lightning?.last_updated ?? null,
+        },
+        timestamps: {
+            prices: prices?.[0]?.last_updated ?? null,
+            mempool: freshMempool?.last_updated ?? null,
+            network: networkMetrics?.last_updated ?? null,
+            dominance: dominance?.last_updated ?? null,
+            fearGreed: fearGreed?.last_updated ?? null,
+            lightning: lightning?.last_updated ?? null,
+            marketCap: globalMetrics?.timestamp ?? null,
         },
     };
 }
