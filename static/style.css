@@ -66,6 +66,24 @@ input:checked + .slider:before { transform: translateX(26px); }
 .indicador.dragging { opacity: 0.4; }
 .card-order-reset { margin-top: 14px; background: transparent; border: 1px solid var(--border-color); color: var(--text-color-secondary); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85em; transition: background-color 0.2s, color 0.2s; }
 .card-order-reset:hover { background-color: var(--accent-color-1); color: #fff; border-color: var(--accent-color-1); }
+
+/* --- Layout em colunas independentes (arrastável) --- */
+.dashboard-container.columns-mode { display: block; }
+.cards-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 20px; }
+.cards-toolbar-label { font-size: 0.85em; color: var(--text-color-secondary); }
+.cards-col-btn { min-width: 34px; padding: 5px 10px; border: 1px solid var(--border-color); background: transparent; color: var(--text-color-secondary); border-radius: 6px; cursor: pointer; font-size: 0.9em; transition: background-color 0.2s, color 0.2s; }
+.cards-col-btn[aria-pressed="true"] { background: var(--accent-color-1); color: #fff; border-color: var(--accent-color-1); font-weight: bold; }
+.cards-col-btn:hover, .cards-reset-btn:hover { background: var(--body-bg); }
+.cards-reset-btn { margin-left: auto; padding: 5px 12px; border: 1px solid var(--border-color); background: transparent; color: var(--text-color-secondary); border-radius: 6px; cursor: pointer; font-size: 0.85em; transition: background-color 0.2s, color 0.2s; }
+.dashboard-columns { display: flex; gap: 25px; align-items: flex-start; }
+.dashboard-column { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 25px; min-height: 80px; border-radius: 8px; }
+.dashboard-column.col-drop { outline: 2px dashed var(--accent-color-1); outline-offset: 6px; }
+.dashboard-column:empty::after { content: "Solte cards aqui"; display: block; text-align: center; color: var(--text-color-secondary); opacity: 0.55; font-size: 0.8em; padding: 28px 8px; border: 1px dashed var(--border-color); border-radius: 8px; }
+.columns-mode .indicador { width: auto; }
+.columns-mode .chart-card { min-width: 0; }
+@media (max-width: 820px) {
+  .dashboard-columns { flex-direction: column; }
+}
 .indicador p { font-size: 1.6em; font-weight: 600; color: var(--accent-color-1); margin: 5px 0; }
 #usdtbrl-price { color: var(--accent-color-3); }
 #fear-greed-value { font-size: 2em; font-weight: bold; margin-bottom: 5px; }

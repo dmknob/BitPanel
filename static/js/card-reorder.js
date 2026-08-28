@@ -1,18 +1,22 @@
 'use strict';
 /**
- * card-reorder.js — arrastar para reordenar os cards do dashboard.
- * A ordem é persistida em localStorage (por navegador). Progressive enhancement:
- * sem JS, os cards ficam na ordem do SSR.
+ * card-reorder.js — layout em COLUNAS independentes, arrastáveis (estilo Kanban).
+ *
+ * Cada coluna é uma pilha vertical própria: um card baixinho é seguido
+ * imediatamente pelo próximo da mesma coluna, sem deixar buraco por causa de um
+ * card mais alto numa coluna vizinha. O usuário escolhe o nº de colunas (2–5),
+ * arrasta cards dentro e entre colunas, e a disposição (quais cards em cada
+ * coluna + ordem + nº de colunas) é persistida em localStorage por navegador.
+ *
+ * Progressive enhancement: sem JS, o CSS mantém o grid padrão.
  */
 (function () {
-    const STORAGE_KEY = 'bitpanel-card-order';
+    const LAYOUT_KEY = 'bitpanel-card-layout';
+    const OLD_ORDER_KEY = 'bitpanel-card-order'; // versão anterior (ordem plana)
+    const MIN_COLS = 2, MAX_COLS = 5, DEFAULT_COLS = 3;
+
     const container = document.querySelector('.dashboard-container');
     if (!container) return;
-
-    // Cards reordenáveis = filhos diretos .indicador, exceto a intro (full-width).
-    function reorderableCards() {
-        return [...container.querySelectorAll(':scope > .indicador:not(.intro-content)')];
-    }
 
     // Chave estável: id existente, ou slug do <h2> (sem a etiqueta .fonte-api).
     function keyFor(card, index) {
@@ -27,37 +31,68 @@
             }
         }
         const slug = base.trim().toLowerCase()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '')   // remove acentos
+            .normalize('NFD').replace(/[̀-ͯ]/g, '')
             .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
         const key = slug || ('card-' + index);
         card.dataset.card = key;
         return key;
     }
 
-    const initialCards = reorderableCards();
-    initialCards.forEach((c, i) => keyFor(c, i));
-    const defaultOrder = initialCards.map(c => c.dataset.card);
+    const dataCards = [...container.querySelectorAll(':scope > .indicador:not(.intro-content)')];
+    if (!dataCards.length) return;
+    dataCards.forEach((c, i) => keyFor(c, i));
+    const cardByKey = new Map(dataCards.map(c => [c.dataset.card, c]));
+    const allKeys = dataCards.map(c => c.dataset.card);
 
     // --- Persistência ---
-    function loadOrder() {
-        try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || null; }
-        catch { return null; }
+    function loadLayout() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+            if (raw && Array.isArray(raw.columns) && raw.cols) return raw;
+        } catch (_) { }
+        return null;
     }
-    function saveOrder() {
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(reorderableCards().map(c => c.dataset.card))); }
-        catch { /* localStorage indisponível */ }
-        updateResetButton();
+    function saveLayout(l) {
+        try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(l)); } catch (_) { }
     }
-    function applyOrder(order) {
-        if (!order || !order.length) return;
-        const byKey = new Map(reorderableCards().map(c => [c.dataset.card, c]));
-        order.forEach(key => { const card = byKey.get(key); if (card) container.appendChild(card); });
-        // Cards novos (ausentes na ordem salva) permanecem no fim, na ordem do SSR.
+    function defaultLayout(cols) {
+        // Sequência: usa a ordem da versão anterior (plana), se existir; senão a do SSR.
+        let seq = allKeys;
+        try {
+            const old = JSON.parse(localStorage.getItem(OLD_ORDER_KEY));
+            if (Array.isArray(old) && old.length) {
+                const known = old.filter(k => cardByKey.has(k));
+                seq = [...known, ...allKeys.filter(k => !known.includes(k))];
+            }
+        } catch (_) { }
+        const columns = Array.from({ length: cols }, () => []);
+        seq.forEach((k, i) => columns[i % cols].push(k)); // round-robin (colunas equilibradas)
+        return { cols, columns };
+    }
+    // Garante que cada card conhecido apareça exatamente uma vez; descarta chaves
+    // desconhecidas; cards novos vão pra coluna mais curta.
+    function normalize(l) {
+        const cols = Math.min(MAX_COLS, Math.max(MIN_COLS, l.cols || DEFAULT_COLS));
+        const columns = Array.from({ length: cols }, () => []);
+        const placed = new Set();
+        (l.columns || []).forEach((colKeys, ci) => {
+            const target = Math.min(ci, cols - 1); // se reduziu colunas, excedente vai pra última
+            (colKeys || []).forEach(k => {
+                if (cardByKey.has(k) && !placed.has(k)) { columns[target].push(k); placed.add(k); }
+            });
+        });
+        allKeys.filter(k => !placed.has(k)).forEach(k => {
+            let mi = 0;
+            for (let i = 1; i < cols; i++) if (columns[i].length < columns[mi].length) mi = i;
+            columns[mi].push(k);
+        });
+        return { cols, columns };
     }
 
-    // --- Drag & drop (iniciado pelo handle) ---
+    let layout = normalize(loadLayout() || defaultLayout(DEFAULT_COLS));
+
+    // --- Drag & drop (vertical, entre colunas) ---
     let dragging = null;
-
     function onDragStart(e) {
         dragging = e.currentTarget.closest('.indicador');
         if (!dragging) return;
@@ -69,61 +104,121 @@
     function onDragEnd() {
         if (dragging) dragging.classList.remove('dragging');
         dragging = null;
-        saveOrder();
+        columnEls.forEach(c => c.classList.remove('col-drop'));
+        persist();
     }
-    function onCardDragOver(e) {
-        if (!dragging) return;
-        const card = e.currentTarget;
-        if (card === dragging) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        const box = card.getBoundingClientRect();
-        const before = e.clientX < box.left + box.width / 2;
-        container.insertBefore(dragging, before ? card : card.nextSibling);
+    function afterElement(col, y) {
+        const cards = [...col.querySelectorAll(':scope > .indicador:not(.dragging)')];
+        for (const c of cards) {
+            const box = c.getBoundingClientRect();
+            if (y < box.top + box.height / 2) return c;
+        }
+        return null;
     }
-
-    function wireCard(card, index) {
-        keyFor(card, index);
+    function wireColumn(col) {
+        col.addEventListener('dragover', (e) => {
+            if (!dragging) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            const ref = afterElement(col, e.clientY);
+            if (ref) col.insertBefore(dragging, ref); else col.appendChild(dragging);
+            columnEls.forEach(c => c.classList.toggle('col-drop', c === col));
+        });
+    }
+    function wireCardHandle(card) {
         const h2 = card.querySelector('h2');
         if (h2 && !h2.querySelector('.card-drag-handle')) {
             const handle = document.createElement('span');
             handle.className = 'card-drag-handle';
             handle.setAttribute('draggable', 'true');
-            handle.setAttribute('role', 'button');
-            handle.setAttribute('tabindex', '0');
-            handle.setAttribute('title', 'Arraste para reordenar');
-            handle.setAttribute('aria-label', 'Arraste para reordenar este card');
-            handle.textContent = '⠿'; // ⠿
+            handle.setAttribute('title', 'Arraste para mover entre colunas / reordenar');
+            handle.setAttribute('aria-label', 'Arraste para mover este card');
+            handle.textContent = '⠿';
             handle.addEventListener('dragstart', onDragStart);
             handle.addEventListener('dragend', onDragEnd);
             h2.insertBefore(handle, h2.firstChild);
         }
-        card.addEventListener('dragover', onCardDragOver);
     }
 
-    // --- Botão "restaurar ordem" (visível só com ordem customizada) ---
-    let resetBtn = null;
-    function ensureResetButton() {
-        const intro = container.querySelector('.intro-content');
-        if (!intro) return;
-        resetBtn = document.createElement('button');
-        resetBtn.type = 'button';
-        resetBtn.className = 'card-order-reset';
-        resetBtn.textContent = '↺ Restaurar ordem dos cards';
-        resetBtn.addEventListener('click', () => {
-            try { localStorage.removeItem(STORAGE_KEY); } catch (_) { }
-            applyOrder(defaultOrder);
-            updateResetButton();
+    // --- Render das colunas ---
+    let columnsWrap = null, columnEls = [];
+    function render() {
+        container.classList.add('columns-mode');
+        if (!columnsWrap) {
+            columnsWrap = document.createElement('div');
+            columnsWrap.className = 'dashboard-columns';
+            container.appendChild(columnsWrap);
+        }
+        // Detach cards (mantidos vivos via cardByKey), recria colunas, redistribui.
+        columnsWrap.textContent = '';
+        columnEls = [];
+        layout.columns.forEach((colKeys) => {
+            const col = document.createElement('div');
+            col.className = 'dashboard-column';
+            colKeys.forEach(k => { const c = cardByKey.get(k); if (c) col.appendChild(c); });
+            wireColumn(col);
+            columnsWrap.appendChild(col);
+            columnEls.push(col);
         });
-        intro.appendChild(resetBtn);
     }
-    function updateResetButton() {
-        if (resetBtn) resetBtn.style.display = loadOrder() ? '' : 'none';
+    function readLayoutFromDOM() {
+        return {
+            cols: layout.cols,
+            columns: columnEls.map(col =>
+                [...col.querySelectorAll(':scope > .indicador')].map(c => c.dataset.card))
+        };
+    }
+    function persist() { layout = readLayoutFromDOM(); saveLayout(layout); }
+
+    // --- Toolbar (nº de colunas + restaurar) ---
+    let toolbar = null;
+    function refreshToolbar() {
+        if (!toolbar) return;
+        toolbar.querySelectorAll('.cards-col-btn').forEach(b =>
+            b.setAttribute('aria-pressed', String(Number(b.dataset.n) === layout.cols)));
+    }
+    function setCols(n) {
+        if (n === layout.cols) return;
+        layout = normalize({ cols: n, columns: readLayoutFromDOM().columns });
+        render();
+        refreshToolbar();
+        saveLayout(layout);
+    }
+    function buildToolbar() {
+        const bar = document.createElement('div');
+        bar.className = 'cards-toolbar';
+        const label = document.createElement('span');
+        label.className = 'cards-toolbar-label';
+        label.textContent = 'Colunas:';
+        bar.appendChild(label);
+        for (let n = MIN_COLS; n <= MAX_COLS; n++) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'cards-col-btn';
+            b.dataset.n = n;
+            b.textContent = n;
+            b.addEventListener('click', () => setCols(n));
+            bar.appendChild(b);
+        }
+        const reset = document.createElement('button');
+        reset.type = 'button';
+        reset.className = 'cards-reset-btn';
+        reset.textContent = '↺ Restaurar';
+        reset.addEventListener('click', () => {
+            try { localStorage.removeItem(LAYOUT_KEY); } catch (_) { }
+            layout = defaultLayout(DEFAULT_COLS);
+            render();
+            refreshToolbar();
+        });
+        bar.appendChild(reset);
+        container.insertBefore(bar, columnsWrap); // entre a intro e as colunas
+        toolbar = bar;
+        refreshToolbar();
     }
 
     // --- Init ---
-    applyOrder(loadOrder());
-    reorderableCards().forEach((c, i) => wireCard(c, i));
-    ensureResetButton();
-    updateResetButton();
+    render();
+    dataCards.forEach((c, i) => wireCardHandle(c));
+    buildToolbar();
+    saveLayout(layout);
 })();
