@@ -17,7 +17,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 import type { Request, Response, NextFunction } from 'express';
 
@@ -933,7 +933,7 @@ if (allowedOrigin) {
 // Rate limiting: máximo 60 requisições por minuto por IP nos endpoints /api/
 const apiLimiter = rateLimit({
     windowMs: 60_000,
-    max: 60,
+    limit: 60,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Muitas requisições. Tente novamente em breve.' },
