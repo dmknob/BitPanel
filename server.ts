@@ -5,7 +5,13 @@
 // ambiente de produção por exigirem GLIBC_2.38+ (ver ADR: db-driver.md).
 // =============================================================================
 
-// 1. Imports
+// 1. Ambiente + Sentry ANTES dos imports instrumentáveis (express/http): a
+//    auto-instrumentação do Sentry v8+ exige init() antes de require('express').
+require('dotenv').config({ quiet: true });
+const Sentry: any = process.env.SENTRY_DSN ? require('@sentry/node') : null;
+if (Sentry) Sentry.init({ dsn: process.env.SENTRY_DSN, tracesSampleRate: 0.1 });
+
+// 2. Imports
 const http = require('http');
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -17,7 +23,6 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-require('dotenv').config({ quiet: true });
 
 import type { Request, Response, NextFunction } from 'express';
 
@@ -149,12 +154,7 @@ if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
     );
 }
 
-// Sentry (opcional — ativo somente se SENTRY_DSN estiver definido no .env)
-let Sentry: any = null;
-if (process.env.SENTRY_DSN) {
-    Sentry = require('@sentry/node');
-    Sentry.init({ dsn: process.env.SENTRY_DSN, tracesSampleRate: 0.1 });
-}
+// (Sentry é inicializado no topo do arquivo, antes dos imports — ver acima.)
 
 // --- VARIÁVEIS GLOBAIS ---
 let db: any;
@@ -900,8 +900,8 @@ function scheduleDailyWorker(): void {
 const app = express();
 const PORT: number = parseInt(process.env.PORT || '3000') || 3000;
 
-// Sentry request handler (deve ser o primeiro middleware)
-if (Sentry) app.use(Sentry.Handlers.requestHandler());
+// Sentry v8+: a instrumentação de request/tracing é automática (via Sentry.init()).
+// Não existe mais Sentry.Handlers.requestHandler().
 
 // Segurança: Helmet com CSP configurado para as fontes externas usadas
 app.use(helmet({
@@ -1115,8 +1115,8 @@ app.get('/tv', (req: Request, res: Response) => {
 
 // --- HANDLERS DE ERRO ---
 
-// Sentry error handler (antes dos handlers 404/500)
-if (Sentry) app.use(Sentry.Handlers.errorHandler());
+// Sentry v8+: registra o error handler do Express (substitui Handlers.errorHandler()).
+if (Sentry) Sentry.setupExpressErrorHandler(app);
 
 // 404
 app.use((req: Request, res: Response) => {
