@@ -1081,7 +1081,7 @@ app.get('/api/alerts', (req: Request, res: Response) => {
 });
 
 app.delete('/api/alerts/:id', (req: Request, res: Response) => {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (isNaN(id)) return res.status(400).json({ error: 'ID inválido.' });
     db.prepare('DELETE FROM price_alerts WHERE id = ?').run(id);
     res.json({ ok: true });
